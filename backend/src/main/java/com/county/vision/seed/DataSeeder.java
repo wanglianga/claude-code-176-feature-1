@@ -22,7 +22,9 @@ import java.time.LocalDate;
  * 演示种子数据：
  * 1) 片区/学校/各类角色账号；
  * 2) 覆盖全部异常场景：请假、电话不通、导入错误、复诊差异大、外配眼镜、
- *    补助争议、配镜不适、半年复查未到场，以及完整闭环、暂缓、正常等对照样例。
+ *    补助争议、配镜不适、半年复查未到场，以及完整闭环、暂缓、正常等对照样例；
+ * 3) 复测二次确认场景：待复测（褚琳）、设备遮挡复测正常关闭转诊（钱进、许阳）、
+ *    环境光线复测仍异常生成家长复诊提醒（林涛），同一设备 DEV-2026-0092 连续异常供统计甄别。
  */
 @Slf4j
 @Component
@@ -296,7 +298,49 @@ public class DataSeeder implements ApplicationRunner {
                 true, new BigDecimal("540.00"), "1.56镜片", false, null));
         flow.addIntervention(intervention(han.getId(), "PARENT_REMIND", d(2026, 10, 6), "提醒家长督促每日2小时户外活动"));
 
-        log.info("种子数据初始化完成：3 个片区、4 所学校、10 个角色账号、16 名学生场景样例（含 3 个已闭环样例）");
+        // ---- 17. 复测二次确认：设备遮挡初测异常，复测恢复正常，已发转诊通知标记取消不删除（钱进，四年级1班）----
+        Student qian = student(s1, grade(s1, "四年级", "1班"), "2024040117", "钱进", "男",
+                LocalDate.of(2013, 8, 9), "钱爸爸", "13800010777", "2025年筛查视力5.0", year);
+        RecordDtos.ScreenRequest qianScreen = screen(qian.getId(), "4.5", "4.6", "-1.25", "-1.00", null, null,
+                false, "每日户外2小时，用眼习惯良好", false, null, d(2026, 9, 16));
+        qianScreen.setDeviceCalibNo("DEV-2026-0092");
+        flow.submitScreen(qianScreen);
+        flow.schoolReview(review(qian.getId(), "CONFIRM", "初测异常，先按流程告知家长"));
+        flow.notifyParent(notify(qian.getId(), "短信", false, null));
+        Long qianTask = flow.initiateRetest(retestInit(qian.getId(), "DEVICE_BLOCK",
+                "现场复查发现 DEV-2026-0092 设备镜头被遮光布部分遮挡，疑似误测")).getId();
+        flow.completeRetest(retestDone(qianTask, "5.0", "5.0", "0.00", "0.00", "DEV-2026-0091",
+                "复测双眼5.0，初测异常系设备遮挡所致，本次转诊任务关闭", d(2026, 9, 18)));
+
+        // ---- 18. 复测二次确认：环境光线影响，复测仍异常，自动生成家长复诊提醒（林涛，三年级3班）----
+        Student lin = student(s1, gc33, "2024030318", "林涛", "男",
+                LocalDate.of(2014, 5, 21), "林妈妈", "13800010888", null, year);
+        RecordDtos.ScreenRequest linScreen = screen(lin.getId(), "4.6", "4.7", "-1.00", "-0.75", null, null,
+                false, "户外活动时间少", false, null, d(2026, 9, 17));
+        linScreen.setDeviceCalibNo("DEV-2026-0092");
+        flow.submitScreen(linScreen);
+        Long linTask = flow.initiateRetest(retestInit(lin.getId(), "AMBIENT_LIGHT",
+                "筛查时教室逆光，担心影响初测结果")).getId();
+        flow.completeRetest(retestDone(linTask, "4.6", "4.6", "-1.00", "-0.75", "DEV-2026-0091",
+                "更换设备与场地后复测仍异常，确认需转诊复诊", d(2026, 9, 19)));
+
+        // ---- 19. 复测二次确认：同一设备连续异常，复测恢复正常（许阳，七年级2班）----
+        Student xu = student(s3, g72, "2023070219", "许阳", "男",
+                LocalDate.of(2012, 10, 12), "许爸爸", "13800010999", null, year);
+        RecordDtos.ScreenRequest xuScreen = screen(xu.getId(), "4.7", "4.8", "-0.75", "-0.50", null, null,
+                false, "用眼习惯一般", false, null, d(2026, 9, 18));
+        xuScreen.setDeviceCalibNo("DEV-2026-0092");
+        flow.submitScreen(xuScreen);
+        Long xuTask = flow.initiateRetest(retestInit(xu.getId(), "DEVICE_BLOCK",
+                "同一台 DEV-2026-0092 连续多名学生异常，怀疑设备问题")).getId();
+        flow.completeRetest(retestDone(xuTask, "5.0", "4.9", "0.00", "0.00", "DEV-2026-0091",
+                "复测正常，初测异常归因设备因素", d(2026, 9, 20)));
+
+        // ---- 12 补充：褚琳正式发起复测任务（待复测样例，复测完成前不推送家长）----
+        flow.initiateRetest(retestInit(chu.getId(), "SITE_ORGANIZATION",
+                "初测时学生排队拥挤、配合度低，建议重新组织复测"));
+
+        log.info("种子数据初始化完成：3 个片区、4 所学校、10 个角色账号、19 名学生场景样例（含 3 个已闭环样例、4 个复测二次确认场景）");
     }
 
     /** 闭环某学生当前未处理的指定类型异常事项 */
@@ -443,6 +487,31 @@ public class DataSeeder implements ApplicationRunner {
         i.setContent(content);
         i.setExecuted(true);
         return i;
+    }
+
+    private RecordDtos.RetestInitiateRequest retestInit(Long sid, String reason, String detail) {
+        RecordDtos.RetestInitiateRequest r = new RecordDtos.RetestInitiateRequest();
+        r.setStudentId(sid);
+        r.setReason(reason);
+        r.setReasonDetail(detail);
+        return r;
+    }
+
+    private RecordDtos.RetestCompleteRequest retestDone(Long taskId, String vl, String vr, String sl, String sr,
+                                                        String device, String conclusion, LocalDate date) {
+        RecordDtos.RetestCompleteRequest r = new RecordDtos.RetestCompleteRequest();
+        r.setTaskId(taskId);
+        r.setScreenDate(date);
+        r.setOrgName("阳光县视光中心");
+        r.setOperatorName("筛查队-小马");
+        r.setDeviceCalibNo(device);
+        r.setNakedVisionLeft(vl);
+        r.setNakedVisionRight(vr);
+        r.setSphereLeft(sl);
+        r.setSphereRight(sr);
+        r.setWearingGlasses(false);
+        r.setConclusion(conclusion);
+        return r;
     }
 
     /* ---------- 实体构造 ---------- */

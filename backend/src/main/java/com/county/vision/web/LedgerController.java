@@ -37,4 +37,10 @@ public class LedgerController {
     public ApiResponse<List<Map<String, Object>>> subsidies(@RequestParam(required = false) String status) {
         return ApiResponse.ok(queryService.subsidies(status));
     }
+
+    @Operation(summary = "复测（二次确认）任务台账（PENDING/CONFIRMED_ABNORMAL/CLEARED_NORMAL/ALL；学校角色仅见本校）")
+    @GetMapping("/retests")
+    public ApiResponse<List<Map<String, Object>>> retests(@RequestParam(required = false) String status) {
+        return ApiResponse.ok(queryService.retests(status));
+    }
 }

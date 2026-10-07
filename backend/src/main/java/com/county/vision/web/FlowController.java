@@ -36,6 +36,18 @@ public class FlowController {
         return ApiResponse.ok(flow.schoolReview(req).getId());
     }
 
+    @Operation(summary = "发起筛查异常二次确认（复测）：保留初测记录，复测完成前不推送家长")
+    @PostMapping("/retest/initiate")
+    public ApiResponse<Long> initiateRetest(@RequestBody RecordDtos.RetestInitiateRequest req) {
+        return ApiResponse.ok(flow.initiateRetest(req).getId());
+    }
+
+    @Operation(summary = "录入复测结果：复测仍异常生成家长复诊提醒（去重）；复测正常则关闭本次转诊任务（已发通知仅标记取消）")
+    @PostMapping("/retest/complete")
+    public ApiResponse<Long> completeRetest(@RequestBody RecordDtos.RetestCompleteRequest req) {
+        return ApiResponse.ok(flow.completeRetest(req).getId());
+    }
+
     @Operation(summary = "告知家长（可登记电话无法接通）")
     @PostMapping("/notify")
     public ApiResponse<Long> notify(@RequestBody RecordDtos.NotifyRequest req) {

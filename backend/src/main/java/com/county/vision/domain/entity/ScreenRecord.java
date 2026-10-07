@@ -56,4 +56,7 @@ public class ScreenRecord extends BaseEntity {
 
     /** 当次请假未检 */
     private Boolean absent = false;
+
+    /** 筛查轮次：SCREEN 初测 / RETEST 复测（二次确认） */
+    private String screenRound = "SCREEN";
 }

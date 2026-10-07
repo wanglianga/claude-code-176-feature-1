@@ -59,6 +59,68 @@
       </template>
     </el-dialog>
 
+    <!-- 2.1 发起复测（二次确认） -->
+    <el-dialog v-model="visible.retestInitiate" title="发起复测（筛查异常二次确认）" width="560px">
+      <el-alert type="warning" :closable="false" style="margin-bottom:12px"
+        title="设备遮挡、佩戴不规范或环境光线等因素可能导致初测结果异常。发起复测后，初测结果暂不推送家长；复测仍异常才会生成家长复诊提醒，复测恢复正常则关闭本次转诊任务。" />
+      <el-form label-width="110px">
+        <el-form-item label="复测原因" required>
+          <el-radio-group v-model="f.retestInitiate.reason">
+            <el-radio value="DEVICE_BLOCK">设备遮挡/故障</el-radio>
+            <el-radio value="WEARING_IMPROPER">佩戴不规范</el-radio>
+            <el-radio value="AMBIENT_LIGHT">环境光线影响</el-radio>
+            <el-radio value="SITE_ORGANIZATION">现场组织问题</el-radio>
+            <el-radio value="OTHER">其他原因</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="原因说明">
+          <el-input v-model="f.retestInitiate.reasonDetail" type="textarea" :rows="3"
+            placeholder="如：现场发现设备镜头被遮光布遮挡 / 学生未按要求佩戴遮眼板 / 教室逆光"/>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="visible.retestInitiate=false">取消</el-button>
+        <el-button type="warning" @click="submit('retestInitiate', api.retestInitiate)">发起复测</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 2.2 录入复测结果 -->
+    <el-dialog v-model="visible.retestComplete" title="录入复测结果（二次确认）" width="680px">
+      <el-alert v-if="ctx.original" type="info" :closable="false" style="margin-bottom:12px"
+        :title="`初测（${ctx.original.screenDate}，设备 ${ctx.original.deviceCalibNo || '—'}）：裸眼 左${ctx.original.nakedVisionLeft || '—'}/右${ctx.original.nakedVisionRight || '—'}，球镜 左${ctx.original.sphereLeft || '—'}/右${ctx.original.sphereRight || '—'}，判定异常。两次数据均会保留在档案中。`" />
+      <el-form :model="f.retestComplete" label-width="130px">
+        <el-row :gutter="10">
+          <el-col :span="12"><el-form-item label="复测日期"><el-date-picker v-model="f.retestComplete.screenDate" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="设备校准编号"><el-input v-model="f.retestComplete.deviceCalibNo" placeholder="复测所用设备"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="裸眼视力 左"><el-input v-model="f.retestComplete.nakedVisionLeft" placeholder="如 5.0"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="裸眼视力 右"><el-input v-model="f.retestComplete.nakedVisionRight" placeholder="如 5.0"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="球镜 左(D)"><el-input v-model="f.retestComplete.sphereLeft" placeholder="如 0.00"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="球镜 右(D)"><el-input v-model="f.retestComplete.sphereRight"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="散光柱镜 左"><el-input v-model="f.retestComplete.cylinderLeft"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="散光柱镜 右"><el-input v-model="f.retestComplete.cylinderRight"/></el-form-item></el-col>
+          <el-col :span="12">
+            <el-form-item label="是否戴镜"><el-switch v-model="f.retestComplete.wearingGlasses"/></el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="复测机构/操作人">
+              <el-input v-model="f.retestComplete.orgName" placeholder="机构" style="width:48%"/>
+              <el-input v-model="f.retestComplete.operatorName" placeholder="操作人" style="width:48%;margin-left:4%"/>
+            </el-form-item>
+          </el-col>
+          <el-col :span="24">
+            <el-form-item label="复测结论">
+              <el-input v-model="f.retestComplete.conclusion" type="textarea" :rows="2"
+                placeholder="复测仍异常：将生成家长复诊提醒；复测恢复正常：请记录初测异常归因，本次转诊任务将关闭"/>
+            </el-form-item>
+          </el-col>
+        </el-row>
+      </el-form>
+      <template #footer>
+        <el-button @click="visible.retestComplete=false">取消</el-button>
+        <el-button type="warning" @click="submit('retestComplete', api.retestComplete)">提交复测结果</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 3. 家长告知 -->
     <el-dialog v-model="visible.notify" title="家长告知" width="520px">
       <el-form label-width="110px">
@@ -234,7 +296,7 @@
 </template>
 
 <script setup>
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
 
@@ -243,6 +305,8 @@ const emit = defineEmits(['done'])
 
 const visible = reactive({})
 const today = new Date().toISOString().slice(0, 10)
+// 复测任务上下文（open('retestComplete', { taskId, original }) 时传入）
+const ctx = ref({ taskId: null, original: null })
 
 const blank = () => ({
   screen: { screenDate: today, orgName: '阳光县视光中心', operatorName: '', deviceCalibNo: '',
@@ -250,6 +314,10 @@ const blank = () => ({
     cylinderLeft: '', cylinderRight: '', wearingGlasses: false, habitSummary: '',
     retestNeeded: false, absent: false },
   review: { result: 'CONFIRM', opinion: '' },
+  retestInitiate: { reason: 'DEVICE_BLOCK', reasonDetail: '' },
+  retestComplete: { screenDate: today, orgName: '阳光县视光中心', operatorName: '', deviceCalibNo: '',
+    nakedVisionLeft: '', nakedVisionRight: '', sphereLeft: '', sphereRight: '',
+    cylinderLeft: '', cylinderRight: '', wearingGlasses: false, conclusion: '' },
   notify: { channel: '电话', unreachable: false, remark: '' },
   choice: { choice: 'COUNTY_HOSPITAL', targetOrg: '阳光县人民医院眼科', deferReason: '', remark: '' },
   visit: { visitDate: today, orgName: '阳光县人民医院眼科', doctor: '', trueMyopia: true,
@@ -264,17 +332,20 @@ const blank = () => ({
 })
 const f = reactive(blank())
 
-const open = (name) => {
+const open = (name, extra) => {
   // 重置为默认值
   const d = blank()
   Object.keys(f).forEach(k => { Object.assign(f[k], d[k]) })
+  ctx.value = { taskId: extra?.taskId ?? null, original: extra?.original ?? null }
   visible[name] = true
 }
 defineExpose({ open })
 
 const submit = async (name, call) => {
   try {
-    const payload = { studentId: props.studentId, ...f[name] }
+    const payload = name === 'retestComplete'
+      ? { taskId: ctx.value.taskId, ...f[name] }
+      : { studentId: props.studentId, ...f[name] }
     await call(payload)
     visible[name] = false
     ElMessage.success('提交成功')

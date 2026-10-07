@@ -7,6 +7,7 @@ public enum StudentStage {
     PENDING_SCREEN("待筛查"),
     SCREENED("已筛查"),
     ABNORMAL_REVIEW("异常复核中"),        // 学校健康老师复核
+    RETEST_PENDING("待复测"),             // 已发起二次确认，等待复测执行
     AWAIT_PARENT("待家长确认"),
     AWAIT_VISIT("待复诊"),
     VISITED("已复诊"),

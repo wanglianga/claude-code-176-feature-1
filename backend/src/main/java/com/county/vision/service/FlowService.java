@@ -31,6 +31,7 @@ public class FlowService {
     private final ReviewFollowUpRepository followupRepo;
     private final InterventionRepository interventionRepo;
     private final IssueTrackerRepository issueRepo;
+    private final RetestTaskRepository retestRepo;
     private final TimelineService timeline;
 
     public FlowService(StudentRepository studentRepo, ScreenRecordRepository screenRepo,
@@ -38,7 +39,7 @@ public class FlowService {
                        VisitRecordRepository visitRepo, GlassesRecordRepository glassesRepo,
                        SubsidyApplicationRepository subsidyRepo, ReviewFollowUpRepository followupRepo,
                        InterventionRepository interventionRepo, IssueTrackerRepository issueRepo,
-                       TimelineService timeline) {
+                       RetestTaskRepository retestRepo, TimelineService timeline) {
         this.studentRepo = studentRepo;
         this.screenRepo = screenRepo;
         this.reviewRepo = reviewRepo;
@@ -49,6 +50,7 @@ public class FlowService {
         this.followupRepo = followupRepo;
         this.interventionRepo = interventionRepo;
         this.issueRepo = issueRepo;
+        this.retestRepo = retestRepo;
         this.timeline = timeline;
     }
 
@@ -114,8 +116,13 @@ public class FlowService {
 
     /** 简单判定：任一眼裸眼视力低于 5.0(标准对数) 或 球镜 <= -0.50D 视为异常 */
     private boolean judgeAbnormal(RecordDtos.ScreenRequest req) {
-        if (belowVision(req.getNakedVisionLeft()) || belowVision(req.getNakedVisionRight())) return true;
-        if (myopicSphere(req.getSphereLeft()) || myopicSphere(req.getSphereRight())) return true;
+        return judgeAbnormal(req.getNakedVisionLeft(), req.getNakedVisionRight(),
+                req.getSphereLeft(), req.getSphereRight());
+    }
+
+    private boolean judgeAbnormal(String vl, String vr, String sl, String sr) {
+        if (belowVision(vl) || belowVision(vr)) return true;
+        if (myopicSphere(sl) || myopicSphere(sr)) return true;
         return false;
     }
 
@@ -140,11 +147,16 @@ public class FlowService {
     }
 
     private String buildAbnormalReason(RecordDtos.ScreenRequest req) {
+        return buildAbnormalReason(req.getNakedVisionLeft(), req.getNakedVisionRight(),
+                req.getSphereLeft(), req.getSphereRight());
+    }
+
+    private String buildAbnormalReason(String vl, String vr, String sl, String sr) {
         StringBuilder sb = new StringBuilder();
-        if (belowVision(req.getNakedVisionLeft()) || belowVision(req.getNakedVisionRight())) {
+        if (belowVision(vl) || belowVision(vr)) {
             sb.append("裸眼视力低于4.9；");
         }
-        if (myopicSphere(req.getSphereLeft()) || myopicSphere(req.getSphereRight())) {
+        if (myopicSphere(sl) || myopicSphere(sr)) {
             sb.append("球镜度数提示近视；");
         }
         return sb.toString();
@@ -152,6 +164,165 @@ public class FlowService {
 
     private String nz(String s) {
         return s == null || s.isBlank() ? "—" : s;
+    }
+
+    /* ================= 1.5 筛查异常二次确认（复测） ================= */
+
+    /**
+     * 健康老师对异常初测记录发起复测（设备遮挡/佩戴不规范/环境光线等疑似外部因素）。
+     * 发起后学生进入“待复测”，初测结果暂不推送家长。
+     */
+    @Transactional
+    public RetestTask initiateRetest(RecordDtos.RetestInitiateRequest req) {
+        Student s = requireStudent(req.getStudentId());
+        ScreenRecord original;
+        if (req.getScreenRecordId() != null) {
+            original = screenRepo.findById(req.getScreenRecordId())
+                    .orElseThrow(() -> new BusinessException("筛查记录不存在"));
+            if (!original.getStudent().getId().equals(s.getId())) {
+                throw new BusinessException("筛查记录不属于该学生");
+            }
+        } else {
+            original = screenRepo.findFirstByStudentIdOrderByScreenDateDescIdDesc(s.getId())
+                    .orElseThrow(() -> new BusinessException("该学生尚无筛查记录，无法发起复测"));
+        }
+        if (Boolean.TRUE.equals(original.getAbsent())) {
+            throw new BusinessException("请假未检记录无需复测，请直接安排补检");
+        }
+        if ("RETEST".equals(original.getScreenRound())) {
+            throw new BusinessException("复测记录不能再次发起复测");
+        }
+        if (!Boolean.TRUE.equals(original.getAbnormal())) {
+            throw new BusinessException("仅筛查异常的记录需要二次确认复测");
+        }
+        RetestReason reason;
+        try {
+            reason = RetestReason.valueOf(req.getReason());
+        } catch (Exception e) {
+            throw new BusinessException("复测原因只能为 DEVICE_BLOCK/WEARING_IMPROPER/AMBIENT_LIGHT/SITE_ORGANIZATION/OTHER");
+        }
+        // 避免同一学生被重复创建复测任务
+        if (retestRepo.countByStudentIdAndStatus(s.getId(), RetestStatus.PENDING) > 0) {
+            throw new BusinessException("该学生已有进行中的复测任务，请勿重复发起");
+        }
+
+        RetestTask task = new RetestTask();
+        task.setStudent(s);
+        task.setOriginalScreen(original);
+        task.setReason(reason);
+        task.setReasonDetail(req.getReasonDetail());
+        task.setInitiator(com.county.vision.security.SecurityUtils.actorLabel());
+        task.setStatus(RetestStatus.PENDING);
+        RetestTask saved = retestRepo.save(task);
+
+        timeline.raiseIssue(s, ScreenFlag.RETEST_NEEDED,
+                "健康老师发起二次确认复测：" + reason.getLabel()
+                        + (req.getReasonDetail() == null || req.getReasonDetail().isBlank()
+                        ? "" : "（" + req.getReasonDetail() + "）"));
+        timeline.event(s, EventType.RETEST,
+                String.format("发起复测二次确认：初测（%s，设备校准编号 %s）判定异常【%s】，疑似%s%s；复测完成前暂不向家长推送初测结果",
+                        original.getScreenDate(), nz(original.getDeviceCalibNo()), nz(original.getAbnormalReason()),
+                        reason.getLabel(),
+                        req.getReasonDetail() == null || req.getReasonDetail().isBlank()
+                                ? "" : "：" + req.getReasonDetail()));
+        timeline.changeStage(s, StudentStage.RETEST_PENDING);
+        return saved;
+    }
+
+    /**
+     * 录入复测结果并给出结论：
+     * - 复测仍异常：生成（或复用未闭环的）家长复诊提醒，进入待家长确认；
+     * - 复测恢复正常：留下初测异常归因，关闭本次转诊任务——已发出的复诊通知仅标记取消、不删除。
+     */
+    @Transactional
+    public RetestTask completeRetest(RecordDtos.RetestCompleteRequest req) {
+        RetestTask task = retestRepo.findById(req.getTaskId())
+                .orElseThrow(() -> new BusinessException("复测任务不存在"));
+        if (task.getStatus() != RetestStatus.PENDING) {
+            throw new BusinessException("该复测任务已完成，请勿重复提交");
+        }
+        Student s = task.getStudent();
+
+        // 复测数据作为独立筛查记录留存（轮次=RETEST），初测/复测两次数据均可追溯
+        ScreenRecord rec = new ScreenRecord();
+        rec.setStudent(s);
+        rec.setScreenRound("RETEST");
+        rec.setScreenDate(req.getScreenDate() == null ? LocalDate.now() : req.getScreenDate());
+        rec.setOrgName(req.getOrgName());
+        rec.setOperatorName(req.getOperatorName());
+        rec.setDeviceCalibNo(req.getDeviceCalibNo());
+        rec.setNakedVisionLeft(req.getNakedVisionLeft());
+        rec.setNakedVisionRight(req.getNakedVisionRight());
+        rec.setSphereLeft(req.getSphereLeft());
+        rec.setSphereRight(req.getSphereRight());
+        rec.setCylinderLeft(req.getCylinderLeft());
+        rec.setCylinderRight(req.getCylinderRight());
+        rec.setWearingGlasses(Boolean.TRUE.equals(req.getWearingGlasses()));
+        rec.setHabitSummary(req.getHabitSummary());
+        rec.setRetestNeeded(false);
+        rec.setAbsent(false);
+        boolean abnormal = judgeAbnormal(rec.getNakedVisionLeft(), rec.getNakedVisionRight(),
+                rec.getSphereLeft(), rec.getSphereRight());
+        rec.setAbnormal(abnormal);
+        if (abnormal) {
+            rec.setAbnormalReason(buildAbnormalReason(rec.getNakedVisionLeft(), rec.getNakedVisionRight(),
+                    rec.getSphereLeft(), rec.getSphereRight()));
+        }
+        ScreenRecord retestScreen = screenRepo.save(rec);
+
+        task.setRetestScreen(retestScreen);
+        task.setFinishTime(LocalDateTime.now());
+        String retestDesc = String.format("复测（%s，设备校准编号 %s，操作人 %s）：裸眼视力 左%s/右%s，球镜 左%s/右%s",
+                rec.getScreenDate(), nz(rec.getDeviceCalibNo()), nz(rec.getOperatorName()),
+                nz(rec.getNakedVisionLeft()), nz(rec.getNakedVisionRight()),
+                nz(rec.getSphereLeft()), nz(rec.getSphereRight()));
+
+        if (abnormal) {
+            task.setStatus(RetestStatus.CONFIRMED_ABNORMAL);
+            task.setConclusion(req.getConclusion() == null || req.getConclusion().isBlank()
+                    ? "复测仍异常：" + rec.getAbnormalReason() : req.getConclusion());
+            retestRepo.save(task);
+
+            // 生成家长复诊提醒；同一学生已有未闭环复诊任务时复用，不重复创建
+            ParentConfirmation pc = confirmRepo
+                    .findFirstByStudentIdAndConfirmedFalseAndCancelledFalseOrderByIdDesc(s.getId())
+                    .orElseGet(() -> {
+                        ParentConfirmation c = new ParentConfirmation();
+                        c.setStudent(s);
+                        return c;
+                    });
+            pc.setRemark("复测仍异常（" + nz(rec.getAbnormalReason()) + "），请尽快安排复诊"
+                    + (req.getConclusion() == null || req.getConclusion().isBlank() ? "" : "：" + req.getConclusion()));
+            confirmRepo.save(pc);
+
+            timeline.event(s, EventType.RETEST, retestDesc
+                    + "，复测仍异常【" + nz(rec.getAbnormalReason()) + "】，已生成家长复诊提醒，待告知家长");
+            timeline.changeStage(s, StudentStage.AWAIT_PARENT);
+        } else {
+            String reasonLabel = task.getReason() == null ? "现场因素" : task.getReason().getLabel();
+            task.setStatus(RetestStatus.CLEARED_NORMAL);
+            task.setConclusion(req.getConclusion() == null || req.getConclusion().isBlank()
+                    ? "复测恢复正常，初测异常归因：" + reasonLabel : req.getConclusion());
+            retestRepo.save(task);
+
+            // 关闭本次转诊任务：已发出的复诊通知不删除，仅标记取消并留存原因
+            confirmRepo.findFirstByStudentIdAndConfirmedFalseAndCancelledFalseOrderByIdDesc(s.getId())
+                    .ifPresent(pc -> {
+                        pc.setCancelled(true);
+                        pc.setCancelReason("复测恢复正常，本次转诊任务关闭（初测异常归因：" + reasonLabel + "）");
+                        pc.setCancelTime(LocalDateTime.now());
+                        confirmRepo.save(pc);
+                    });
+
+            timeline.event(s, EventType.RETEST, retestDesc
+                    + "，复测恢复正常；初测异常归因：" + reasonLabel
+                    + (task.getReasonDetail() == null || task.getReasonDetail().isBlank()
+                    ? "" : "（" + task.getReasonDetail() + "）")
+                    + "，本次转诊任务已关闭");
+            timeline.changeStage(s, StudentStage.SCREENED);
+        }
+        issueCloseIfOpen(s, ScreenFlag.RETEST_NEEDED, "复测已完成：" + task.getStatus().getLabel());
+        return task;
     }
 
     /* ================= 2. 学校健康老师复核 ================= */
@@ -191,7 +362,7 @@ public class FlowService {
     public ParentConfirmation notifyParent(RecordDtos.NotifyRequest req) {
         Student s = requireStudent(req.getStudentId());
         ParentConfirmation pc = confirmRepo.findFirstByStudentIdOrderByIdDesc(s.getId())
-                .filter(c -> !Boolean.TRUE.equals(c.getConfirmed()))
+                .filter(c -> !Boolean.TRUE.equals(c.getConfirmed()) && !Boolean.TRUE.equals(c.getCancelled()))
                 .orElseGet(() -> {
                     ParentConfirmation c = new ParentConfirmation();
                     c.setStudent(s);
@@ -229,6 +400,7 @@ public class FlowService {
             throw new BusinessException("选择暂缓处理时必须填写原因");
         }
         ParentConfirmation pc = confirmRepo.findFirstByStudentIdOrderByIdDesc(s.getId())
+                .filter(c -> !Boolean.TRUE.equals(c.getCancelled()))
                 .orElseGet(() -> {
                     ParentConfirmation c = new ParentConfirmation();
                     c.setStudent(s);

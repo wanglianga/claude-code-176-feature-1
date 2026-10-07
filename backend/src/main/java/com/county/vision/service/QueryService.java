@@ -4,6 +4,7 @@ import com.county.vision.common.BusinessException;
 import com.county.vision.domain.entity.*;
 import com.county.vision.domain.enums.EventType;
 import com.county.vision.domain.enums.InterventionType;
+import com.county.vision.domain.enums.RetestStatus;
 import com.county.vision.domain.enums.SubsidyStatus;
 import com.county.vision.domain.repository.*;
 import com.county.vision.dto.StudentDtos;
@@ -32,13 +33,14 @@ public class QueryService {
     private final InterventionRepository interventionRepo;
     private final IssueTrackerRepository issueRepo;
     private final HealthEventRepository eventRepo;
+    private final RetestTaskRepository retestRepo;
 
     public QueryService(StudentRepository studentRepo, ScreenRecordRepository screenRepo,
                         ParentConfirmationRepository confirmRepo, SchoolReviewRepository reviewRepo,
                         VisitRecordRepository visitRepo, GlassesRecordRepository glassesRepo,
                         SubsidyApplicationRepository subsidyRepo, ReviewFollowUpRepository followupRepo,
                         InterventionRepository interventionRepo, IssueTrackerRepository issueRepo,
-                        HealthEventRepository eventRepo) {
+                        HealthEventRepository eventRepo, RetestTaskRepository retestRepo) {
         this.studentRepo = studentRepo;
         this.screenRepo = screenRepo;
         this.confirmRepo = confirmRepo;
@@ -50,6 +52,7 @@ public class QueryService {
         this.interventionRepo = interventionRepo;
         this.issueRepo = issueRepo;
         this.eventRepo = eventRepo;
+        this.retestRepo = retestRepo;
     }
 
     @Transactional(readOnly = true)
@@ -64,6 +67,9 @@ public class QueryService {
         d.put("issues", issueRepo.findByStudentIdOrderByRaisedAtDesc(id).stream().map(this::issueMap).toList());
         d.put("latestScreen", screenRepo.findFirstByStudentIdOrderByScreenDateDescIdDesc(id)
                 .map(this::screenMap).orElse(null));
+        d.put("screens", screenRepo.findByStudentIdOrderByScreenDateAscIdAsc(id).stream()
+                .map(this::screenMap).toList());
+        d.put("retestTasks", retestRepo.findByStudentIdOrderByIdDesc(id).stream().map(this::retestTaskMap).toList());
         d.put("confirmation", confirmRepo.findFirstByStudentIdOrderByIdDesc(id)
                 .map(this::confirmMap).orElse(null));
         d.put("schoolReview", reviewRepo.findFirstByStudentIdOrderByIdDesc(id)
@@ -113,6 +119,26 @@ public class QueryService {
         return list.stream().map(this::subsidyMap).toList();
     }
 
+    /** 复测（二次确认）任务台账：学校角色仅见本校 */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> retests(String status) {
+        LoginUser me = SecurityUtils.current();
+        List<RetestTask> list;
+        if (status == null || status.isBlank() || "ALL".equals(status)) {
+            list = retestRepo.findAll();
+        } else {
+            try {
+                list = retestRepo.findByStatusOrderByIdDesc(RetestStatus.valueOf(status));
+            } catch (IllegalArgumentException e) {
+                list = retestRepo.findAll();
+            }
+        }
+        return list.stream()
+                .filter(t -> me.getSchoolId() == null || me.getSchoolId().equals(t.getStudent().getSchool().getId()))
+                .sorted((a, b) -> Long.compare(b.getId(), a.getId()))
+                .map(this::retestTaskMap).toList();
+    }
+
     /* ----------------------- 投影 ----------------------- */
 
     private Map<String, Object> baseStudent(Student s) {
@@ -146,6 +172,7 @@ public class QueryService {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", r.getId());
         m.put("screenDate", r.getScreenDate());
+        m.put("screenRound", r.getScreenRound() == null ? "SCREEN" : r.getScreenRound());
         m.put("orgName", r.getOrgName());
         m.put("operatorName", r.getOperatorName());
         m.put("deviceCalibNo", r.getDeviceCalibNo());
@@ -164,6 +191,28 @@ public class QueryService {
         return m;
     }
 
+    private Map<String, Object> retestTaskMap(RetestTask t) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", t.getId());
+        m.put("studentId", t.getStudent().getId());
+        m.put("studentName", t.getStudent().getName());
+        m.put("schoolName", t.getStudent().getSchool().getName());
+        m.put("grade", t.getStudent().getGradeClass().getGrade());
+        m.put("className", t.getStudent().getGradeClass().getClassName());
+        m.put("reason", t.getReason() == null ? null : t.getReason().name());
+        m.put("reasonLabel", t.getReason() == null ? null : t.getReason().getLabel());
+        m.put("reasonDetail", t.getReasonDetail());
+        m.put("initiator", t.getInitiator());
+        m.put("status", t.getStatus().name());
+        m.put("statusLabel", t.getStatus().getLabel());
+        m.put("conclusion", t.getConclusion());
+        m.put("finishTime", t.getFinishTime());
+        m.put("createdAt", t.getCreatedAt());
+        m.put("originalScreen", t.getOriginalScreen() == null ? null : screenMap(t.getOriginalScreen()));
+        m.put("retestScreen", t.getRetestScreen() == null ? null : screenMap(t.getRetestScreen()));
+        return m;
+    }
+
     private Map<String, Object> confirmMap(ParentConfirmation c) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", c.getId());
@@ -179,6 +228,9 @@ public class QueryService {
         m.put("targetOrg", c.getTargetOrg());
         m.put("deferReason", c.getDeferReason());
         m.put("remark", c.getRemark());
+        m.put("cancelled", c.getCancelled());
+        m.put("cancelReason", c.getCancelReason());
+        m.put("cancelTime", c.getCancelTime());
         return m;
     }
 

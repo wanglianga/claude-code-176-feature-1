@@ -39,4 +39,15 @@ public class ParentConfirmation extends BaseEntity {
     private String deferReason;
 
     private String remark;
+
+    /**
+     * 复诊任务是否已取消（如复测恢复正常后关闭转诊）。
+     * 已发出的告知不做物理删除，仅标记取消并保留原因，家长可见档案中仍可追溯。
+     */
+    private Boolean cancelled = false;
+
+    @Column(length = 500)
+    private String cancelReason;
+
+    private LocalDateTime cancelTime;
 }

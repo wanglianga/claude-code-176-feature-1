@@ -24,6 +24,7 @@
         <el-button-group>
           <el-button type="primary" plain @click="openDialog('screen')">现场筛查/补检</el-button>
           <el-button type="primary" plain @click="openDialog('review')">学校复核</el-button>
+          <el-button type="warning" plain @click="openDialog('retestInitiate')">发起复测</el-button>
           <el-button type="primary" plain @click="openDialog('notify')">家长告知</el-button>
           <el-button type="primary" plain @click="openDialog('choice')">家长确认选择</el-button>
           <el-button type="success" plain @click="openDialog('visit')">复诊回写</el-button>
@@ -76,6 +77,73 @@
                 <el-descriptions-item label="用眼习惯问卷" :span="2">{{ d.latestScreen.habitSummary || '—' }}</el-descriptions-item>
               </el-descriptions>
               <el-empty v-else description="暂无筛查记录" :image-size="60" />
+              <template v-if="d.screens?.length > 1">
+                <el-divider content-position="left">全部筛查记录（初测/复测均保留）</el-divider>
+                <el-table :data="d.screens" size="small" border>
+                  <el-table-column prop="screenDate" label="日期" width="105" />
+                  <el-table-column label="轮次" width="80">
+                    <template #default="{ row }">
+                      <el-tag size="small" :type="row.screenRound === 'RETEST' ? 'warning' : 'info'">
+                        {{ row.screenRound === 'RETEST' ? '复测' : '初测' }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="裸眼视力(左/右)" width="130">
+                    <template #default="{ row }">{{ row.nakedVisionLeft || '—' }} / {{ row.nakedVisionRight || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="球镜(左/右)" width="120">
+                    <template #default="{ row }">{{ row.sphereLeft || '—' }} / {{ row.sphereRight || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column prop="deviceCalibNo" label="设备编号" width="130" />
+                  <el-table-column prop="operatorName" label="操作人" width="110" />
+                  <el-table-column label="判定" width="90">
+                    <template #default="{ row }">
+                      <el-tag v-if="row.absent" size="small" type="info">请假</el-tag>
+                      <el-tag v-else-if="row.abnormal" size="small" type="danger">异常</el-tag>
+                      <el-tag v-else size="small" type="success">正常</el-tag>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </template>
+            </el-tab-pane>
+
+            <el-tab-pane :label="`复测二次确认(${d.retestTasks?.length || 0})`" name="retest">
+              <div v-for="t in d.retestTasks" :key="t.id" style="margin-bottom:10px">
+                <el-card shadow="never">
+                  <div>
+                    <el-tag size="small" :type="t.status === 'PENDING' ? 'warning' : t.status === 'CLEARED_NORMAL' ? 'success' : 'danger'">
+                      {{ t.statusLabel }}
+                    </el-tag>
+                    <el-tag size="small" type="warning" effect="plain" style="margin-left:6px">{{ t.reasonLabel }}</el-tag>
+                    <span class="muted" style="margin-left:8px">{{ t.reasonDetail }}</span>
+                  </div>
+                  <el-row :gutter="10" style="margin-top:8px">
+                    <el-col :span="11">
+                      <div class="muted">初测（{{ t.originalScreen?.screenDate }} ｜ 设备 {{ t.originalScreen?.deviceCalibNo || '—' }} ｜ {{ t.originalScreen?.operatorName || '—' }}）</div>
+                      <div>裸眼 左{{ t.originalScreen?.nakedVisionLeft || '—' }}/右{{ t.originalScreen?.nakedVisionRight || '—' }}，
+                        球镜 左{{ t.originalScreen?.sphereLeft || '—' }}/右{{ t.originalScreen?.sphereRight || '—' }}
+                        <el-tag size="small" type="danger" style="margin-left:4px">异常</el-tag>
+                      </div>
+                    </el-col>
+                    <el-col :span="11" v-if="t.retestScreen">
+                      <div class="muted">复测（{{ t.retestScreen.screenDate }} ｜ 设备 {{ t.retestScreen.deviceCalibNo || '—' }} ｜ {{ t.retestScreen.operatorName || '—' }}）</div>
+                      <div>裸眼 左{{ t.retestScreen.nakedVisionLeft || '—' }}/右{{ t.retestScreen.nakedVisionRight || '—' }}，
+                        球镜 左{{ t.retestScreen.sphereLeft || '—' }}/右{{ t.retestScreen.sphereRight || '—' }}
+                        <el-tag size="small" :type="t.retestScreen.abnormal ? 'danger' : 'success'" style="margin-left:4px">
+                          {{ t.retestScreen.abnormal ? '仍异常' : '正常' }}
+                        </el-tag>
+                      </div>
+                    </el-col>
+                  </el-row>
+                  <el-alert v-if="t.conclusion" style="margin-top:6px" :closable="false"
+                    :type="t.status === 'CLEARED_NORMAL' ? 'success' : t.status === 'PENDING' ? 'warning' : 'error'"
+                    :title="'复测结论：' + t.conclusion" />
+                  <div class="muted" style="margin-top:4px">发起人：{{ t.initiator }}</div>
+                  <el-button v-if="t.status === 'PENDING'" size="small" type="warning" style="margin-top:6px"
+                             @click="completeRetest(t)">录入复测结果</el-button>
+                </el-card>
+              </div>
+              <el-empty v-if="!d.retestTasks?.length" description="暂无复测记录" :image-size="60" />
             </el-tab-pane>
 
             <el-tab-pane :label="`复诊处方(${d.visits?.length || 0})`" name="visit">
@@ -205,6 +273,7 @@ const load = async () => {
 const reload = async () => { await load(); ElMessage.success('操作已记录到健康管理时间线') }
 
 const openDialog = (name) => dialogs.value.open(name)
+const completeRetest = (t) => dialogs.value.open('retestComplete', { taskId: t.id, original: t.originalScreen })
 const fmt = (t) => t ? t.replace('T', ' ').substring(0, 16) : ''
 const dotType = (t) => ({
   SCREEN: 'primary', VISIT: 'success', PRESCRIPTION: 'success', SUBSIDY: 'warning',

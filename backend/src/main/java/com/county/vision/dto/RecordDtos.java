@@ -143,6 +143,38 @@ public class RecordDtos {
     }
 
     @Data
+    public static class RetestInitiateRequest {
+        @NotNull(message = "学生ID不能为空")
+        private Long studentId;
+        /** 被质疑的初测记录ID；为空则取该生最新一条异常初测记录 */
+        private Long screenRecordId;
+        /** DEVICE_BLOCK / WEARING_IMPROPER / AMBIENT_LIGHT / SITE_ORGANIZATION / OTHER */
+        @NotNull(message = "复测原因不能为空")
+        private String reason;
+        private String reasonDetail;
+    }
+
+    @Data
+    public static class RetestCompleteRequest {
+        @NotNull(message = "复测任务ID不能为空")
+        private Long taskId;
+        private LocalDate screenDate;
+        private String orgName;
+        private String operatorName;
+        private String deviceCalibNo;
+        private String nakedVisionLeft;
+        private String nakedVisionRight;
+        private String sphereLeft;
+        private String sphereRight;
+        private String cylinderLeft;
+        private String cylinderRight;
+        private Boolean wearingGlasses;
+        private String habitSummary;
+        /** 复测结论说明（复测正常时用于记录初测异常归因，必填） */
+        private String conclusion;
+    }
+
+    @Data
     public static class FixImportRequest {
         @NotNull
         private Long studentId;

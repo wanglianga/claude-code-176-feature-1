@@ -1,8 +1,11 @@
 package com.county.vision.service;
 
 import com.county.vision.cache.CacheService;
+import com.county.vision.domain.entity.RetestTask;
 import com.county.vision.domain.entity.School;
+import com.county.vision.domain.entity.ScreenRecord;
 import com.county.vision.domain.entity.Student;
+import com.county.vision.domain.enums.RetestStatus;
 import com.county.vision.domain.enums.ScreenFlag;
 import com.county.vision.domain.enums.StudentStage;
 import com.county.vision.domain.repository.*;
@@ -30,6 +33,7 @@ public class StatsService {
     private final SubsidyApplicationRepository subsidyRepo;
     private final IssueTrackerRepository issueRepo;
     private final SchoolRepository schoolRepo;
+    private final RetestTaskRepository retestRepo;
     private final CacheService cache;
 
     @PersistenceContext
@@ -38,7 +42,7 @@ public class StatsService {
     public StatsService(StudentRepository studentRepo, ScreenRecordRepository screenRepo,
                         VisitRecordRepository visitRepo, GlassesRecordRepository glassesRepo,
                         SubsidyApplicationRepository subsidyRepo, IssueTrackerRepository issueRepo,
-                        SchoolRepository schoolRepo, CacheService cache) {
+                        SchoolRepository schoolRepo, RetestTaskRepository retestRepo, CacheService cache) {
         this.studentRepo = studentRepo;
         this.screenRepo = screenRepo;
         this.visitRepo = visitRepo;
@@ -46,6 +50,7 @@ public class StatsService {
         this.subsidyRepo = subsidyRepo;
         this.issueRepo = issueRepo;
         this.schoolRepo = schoolRepo;
+        this.retestRepo = retestRepo;
         this.cache = cache;
     }
 
@@ -243,5 +248,101 @@ public class StatsService {
             out.add(row);
         });
         return out;
+    }
+
+    /**
+     * 复测（二次确认）比例统计：按班级或按设备分组。
+     * 复测正常率高的班级/设备提示设备、光线或现场组织问题，而非学生个体问题。
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> retestStats(String groupBy, Long schoolId) {
+        LoginUser me = SecurityUtils.current();
+        if (me.getSchoolId() != null) schoolId = me.getSchoolId();
+        boolean byDevice = "device".equalsIgnoreCase(groupBy);
+
+        List<Student> students = studentRepo.search(schoolId, null, null, null, null, false);
+        Map<Long, Student> byId = new LinkedHashMap<>();
+        students.forEach(s -> byId.put(s.getId(), s));
+
+        List<ScreenRecord> screens = screenRepo.findAll().stream()
+                .filter(r -> byId.containsKey(r.getStudent().getId()))
+                .filter(r -> !"RETEST".equals(r.getScreenRound()))
+                .filter(r -> !Boolean.TRUE.equals(r.getAbsent()))
+                .toList();
+        List<RetestTask> tasks = retestRepo.findAll().stream()
+                .filter(t -> byId.containsKey(t.getStudent().getId()))
+                .toList();
+
+        // 指标下标：0 初测数 1 初测异常数 2 发起复测数 3 复测完成数 4 复测仍异常数 5 复测恢复正常数
+        Map<String, long[]> agg = new LinkedHashMap<>();
+        Map<String, String[]> meta = new LinkedHashMap<>();
+        for (ScreenRecord r : screens) {
+            Student st = byId.get(r.getStudent().getId());
+            String key = byDevice ? deviceKey(r.getDeviceCalibNo()) : classKey(st);
+            agg.computeIfAbsent(key, k -> new long[6])[0]++;
+            meta.computeIfAbsent(key, k -> byDevice
+                    ? new String[]{key, ""}
+                    : new String[]{st.getSchool().getName(), st.getGradeClass().getGrade(),
+                    st.getGradeClass().getClassName()});
+            if (Boolean.TRUE.equals(r.getAbnormal())) agg.get(key)[1]++;
+        }
+        for (RetestTask t : tasks) {
+            Student st = byId.get(t.getStudent().getId());
+            String key = byDevice ? deviceKey(t.getOriginalScreen().getDeviceCalibNo()) : classKey(st);
+            long[] arr = agg.computeIfAbsent(key, k -> new long[6]);
+            meta.computeIfAbsent(key, k -> byDevice
+                    ? new String[]{key, ""}
+                    : new String[]{st.getSchool().getName(), st.getGradeClass().getGrade(),
+                    st.getGradeClass().getClassName()});
+            arr[2]++;
+            if (t.getStatus() == RetestStatus.CONFIRMED_ABNORMAL) {
+                arr[3]++;
+                arr[4]++;
+            } else if (t.getStatus() == RetestStatus.CLEARED_NORMAL) {
+                arr[3]++;
+                arr[5]++;
+            }
+        }
+
+        List<Map<String, Object>> out = new ArrayList<>();
+        agg.forEach((key, arr) -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            String[] m = meta.get(key);
+            if (byDevice) {
+                row.put("deviceCalibNo", key);
+            } else {
+                row.put("schoolName", m[0]);
+                row.put("grade", m[1]);
+                row.put("className", m[2]);
+            }
+            row.put("screened", arr[0]);
+            row.put("abnormal", arr[1]);
+            row.put("retestInitiated", arr[2]);
+            row.put("retestDone", arr[3]);
+            row.put("confirmedAbnormal", arr[4]);
+            row.put("clearedNormal", arr[5]);
+            row.put("pending", arr[2] - arr[3]);
+            // 复测率 = 发起复测 / 初测异常；复测正常率 = 恢复正常 / 已完成复测
+            row.put("retestRate", rate(arr[2], arr[1]));
+            row.put("clearedRate", rate(arr[5], arr[3]));
+            // 同一设备/班级连续出现异常且复测后多恢复正常 → 疑似设备、光线或现场组织因素
+            boolean suspicious = arr[3] >= 2 && arr[5] * 1.0 / arr[3] >= 0.5;
+            row.put("suspicious", suspicious);
+            row.put("hint", suspicious
+                    ? "复测后多恢复正常，疑似设备/光线/现场组织因素，建议校准设备并复盘现场流程"
+                    : (arr[4] > 0 && arr[5] == 0 ? "复测仍异常为主，倾向学生个体问题，按流程转诊" : ""));
+            out.add(row);
+        });
+        out.sort((a, b) -> Long.compare(((Number) b.get("retestInitiated")).longValue(),
+                ((Number) a.get("retestInitiated")).longValue()));
+        return out;
+    }
+
+    private String deviceKey(String deviceCalibNo) {
+        return deviceCalibNo == null || deviceCalibNo.isBlank() ? "未登记设备" : deviceCalibNo;
+    }
+
+    private String classKey(Student s) {
+        return s.getSchool().getName() + "|" + s.getGradeClass().getGrade() + "|" + s.getGradeClass().getClassName();
     }
 }
