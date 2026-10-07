@@ -32,13 +32,16 @@ public class QueryService {
     private final InterventionRepository interventionRepo;
     private final IssueTrackerRepository issueRepo;
     private final HealthEventRepository eventRepo;
+    private final RetestRecordRepository retestRepo;
+    private final ReferralTaskRepository referralRepo;
 
     public QueryService(StudentRepository studentRepo, ScreenRecordRepository screenRepo,
                         ParentConfirmationRepository confirmRepo, SchoolReviewRepository reviewRepo,
                         VisitRecordRepository visitRepo, GlassesRecordRepository glassesRepo,
                         SubsidyApplicationRepository subsidyRepo, ReviewFollowUpRepository followupRepo,
                         InterventionRepository interventionRepo, IssueTrackerRepository issueRepo,
-                        HealthEventRepository eventRepo) {
+                        HealthEventRepository eventRepo,
+                        RetestRecordRepository retestRepo, ReferralTaskRepository referralRepo) {
         this.studentRepo = studentRepo;
         this.screenRepo = screenRepo;
         this.confirmRepo = confirmRepo;
@@ -50,6 +53,8 @@ public class QueryService {
         this.interventionRepo = interventionRepo;
         this.issueRepo = issueRepo;
         this.eventRepo = eventRepo;
+        this.retestRepo = retestRepo;
+        this.referralRepo = referralRepo;
     }
 
     @Transactional(readOnly = true)
@@ -62,8 +67,15 @@ public class QueryService {
 
         Map<String, Object> d = baseStudent(s);
         d.put("issues", issueRepo.findByStudentIdOrderByRaisedAtDesc(id).stream().map(this::issueMap).toList());
+        // 全部筛查记录（首次 + 二次复测两轮数据均保留）
+        d.put("screens", screenRepo.findByStudentIdOrderByScreenDateAscIdAsc(id).stream()
+                .map(this::screenMap).toList());
         d.put("latestScreen", screenRepo.findFirstByStudentIdOrderByScreenDateDescIdDesc(id)
                 .map(this::screenMap).orElse(null));
+        d.put("retests", retestRepo.findByStudentIdOrderByIdDesc(id).stream()
+                .map(this::retestMap).toList());
+        d.put("referrals", referralRepo.findByStudentIdOrderByIdDesc(id).stream()
+                .map(this::referralMap).toList());
         d.put("confirmation", confirmRepo.findFirstByStudentIdOrderByIdDesc(id)
                 .map(this::confirmMap).orElse(null));
         d.put("schoolReview", reviewRepo.findFirstByStudentIdOrderByIdDesc(id)
@@ -113,6 +125,28 @@ public class QueryService {
         return list.stream().map(this::subsidyMap).toList();
     }
 
+    /* ----------------------- 复测 / 转诊台账 ----------------------- */
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> retests(String status) {
+        List<RetestRecord> list = (status == null || status.isBlank() || "ALL".equals(status))
+                ? retestRepo.findAllByOrderByIdDesc() : retestRepo.findByStatusOrderByIdDesc(status);
+        Long schoolId = SecurityUtils.current().getSchoolId();
+        return list.stream()
+                .filter(r -> schoolId == null || schoolId.equals(r.getStudent().getSchool().getId()))
+                .map(this::retestMap).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> referrals(String status) {
+        List<ReferralTask> list = (status == null || status.isBlank() || "ALL".equals(status))
+                ? referralRepo.findAllByOrderByIdDesc() : referralRepo.findByStatusOrderByIdDesc(status);
+        Long schoolId = SecurityUtils.current().getSchoolId();
+        return list.stream()
+                .filter(t -> schoolId == null || schoolId.equals(t.getStudent().getSchool().getId()))
+                .map(this::referralMap).toList();
+    }
+
     /* ----------------------- 投影 ----------------------- */
 
     private Map<String, Object> baseStudent(Student s) {
@@ -149,6 +183,9 @@ public class QueryService {
         m.put("orgName", r.getOrgName());
         m.put("operatorName", r.getOperatorName());
         m.put("deviceCalibNo", r.getDeviceCalibNo());
+        m.put("venue", r.getVenue());
+        m.put("screenRound", r.getScreenRound());
+        m.put("screenRoundLabel", "RETEST".equals(r.getScreenRound()) ? "二次复测" : "首次筛查");
         m.put("nakedVisionLeft", r.getNakedVisionLeft());
         m.put("nakedVisionRight", r.getNakedVisionRight());
         m.put("sphereLeft", r.getSphereLeft());
@@ -161,6 +198,78 @@ public class QueryService {
         m.put("abnormal", r.getAbnormal());
         m.put("abnormalReason", r.getAbnormalReason());
         m.put("absent", r.getAbsent());
+        m.put("schoolId", r.getStudent().getSchool().getId());
+        m.put("schoolName", r.getStudent().getSchool().getName());
+        m.put("classId", r.getStudent().getGradeClass().getId());
+        m.put("grade", r.getStudent().getGradeClass().getGrade());
+        m.put("className", r.getStudent().getGradeClass().getClassName());
+        return m;
+    }
+
+    private Map<String, Object> retestMap(RetestRecord r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", r.getId());
+        m.put("studentId", r.getStudent().getId());
+        m.put("studentName", r.getStudent().getName());
+        m.put("schoolId", r.getStudent().getSchool().getId());
+        m.put("schoolName", r.getStudent().getSchool().getName());
+        m.put("grade", r.getStudent().getGradeClass().getGrade());
+        m.put("className", r.getStudent().getGradeClass().getClassName());
+        m.put("originalScreenId", r.getOriginalScreen().getId());
+        m.put("originalScreen", screenMap(r.getOriginalScreen()));
+        m.put("retestScreenId", r.getRetestScreen() == null ? null : r.getRetestScreen().getId());
+        m.put("retestScreen", r.getRetestScreen() == null ? null : screenMap(r.getRetestScreen()));
+        m.put("reason", r.getReason() == null ? null : r.getReason().name());
+        m.put("reasonLabel", r.getReason() == null ? null : r.getReason().getLabel());
+        m.put("reasonDetail", r.getReasonDetail());
+        m.put("status", r.getStatus());
+        m.put("statusLabel", switch (r.getStatus()) {
+            case RetestRecord.STATUS_ABNORMAL_CONFIRMED -> "复测仍异常";
+            case RetestRecord.STATUS_NORMAL_CLOSED -> "复测正常已关闭";
+            default -> "待复测";
+        });
+        m.put("conclusion", r.getConclusion());
+        m.put("conclusionLabel", RetestRecord.CONCLUSION_NORMAL.equals(r.getConclusion())
+                ? "复测恢复正常" : RetestRecord.CONCLUSION_ABNORMAL.equals(r.getConclusion())
+                ? "复测仍异常" : null);
+        m.put("conclusionNote", r.getConclusionNote());
+        m.put("initiatedBy", r.getInitiatedBy());
+        m.put("initiatedAt", r.getInitiatedAt());
+        m.put("retestOperatorName", r.getRetestOperatorName());
+        m.put("retestDeviceCalibNo", r.getRetestDeviceCalibNo());
+        m.put("retestOrgName", r.getRetestOrgName());
+        m.put("concludedBy", r.getConcludedBy());
+        m.put("concludedAt", r.getConcludedAt());
+        return m;
+    }
+
+    private Map<String, Object> referralMap(ReferralTask t) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", t.getId());
+        m.put("studentId", t.getStudent().getId());
+        m.put("studentName", t.getStudent().getName());
+        m.put("schoolName", t.getStudent().getSchool().getName());
+        m.put("grade", t.getStudent().getGradeClass().getGrade());
+        m.put("className", t.getStudent().getGradeClass().getClassName());
+        m.put("retestId", t.getRetestRecord() == null ? null : t.getRetestRecord().getId());
+        m.put("source", t.getSource());
+        m.put("sourceLabel", ReferralTask.SOURCE_RETEST.equals(t.getSource()) ? "二次复测仍异常" : "学校复核确认");
+        m.put("status", t.getStatus());
+        m.put("statusLabel", switch (t.getStatus()) {
+            case ReferralTask.STATUS_CONFIRMED -> "家长已确认待复诊";
+            case ReferralTask.STATUS_VISITED -> "已完成复诊";
+            case ReferralTask.STATUS_CLOSED -> "已关闭(复测正常)";
+            default -> "待家长告知确认";
+        });
+        m.put("notified", t.getNotified());
+        m.put("notifyChannel", t.getNotifyChannel());
+        m.put("notifyTime", t.getNotifyTime());
+        m.put("targetOrg", t.getTargetOrg());
+        m.put("closeNote", t.getCloseNote());
+        m.put("closedBy", t.getClosedBy());
+        m.put("closedAt", t.getClosedAt());
+        m.put("createdBy", t.getCreatedBy());
+        m.put("createdAt", t.getCreatedAt());
         return m;
     }
 

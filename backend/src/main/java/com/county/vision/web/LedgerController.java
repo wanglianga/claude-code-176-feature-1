@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
 
-@Tag(name = "台账（异常事项/复查计划/补助）")
+@Tag(name = "台账（异常事项/复查计划/补助/二次复测/转诊任务）")
 @RestController
 @RequestMapping("/api/ledger")
 public class LedgerController {
@@ -36,5 +36,17 @@ public class LedgerController {
     @GetMapping("/subsidies")
     public ApiResponse<List<Map<String, Object>>> subsidies(@RequestParam(required = false) String status) {
         return ApiResponse.ok(queryService.subsidies(status));
+    }
+
+    @Operation(summary = "二次复测台账（PENDING待复测/ABNORMAL_CONFIRMED仍异常/NORMAL_CLOSED正常关闭/ALL），含两次数据、设备、操作人、原因")
+    @GetMapping("/retests")
+    public ApiResponse<List<Map<String, Object>>> retests(@RequestParam(required = false) String status) {
+        return ApiResponse.ok(queryService.retests(status));
+    }
+
+    @Operation(summary = "家长复诊提醒（转诊任务）台账（PENDING/CONFIRMED/VISITED/CLOSED/ALL），关闭与已发通知均留痕不删除")
+    @GetMapping("/referrals")
+    public ApiResponse<List<Map<String, Object>>> referrals(@RequestParam(required = false) String status) {
+        return ApiResponse.ok(queryService.referrals(status));
     }
 }

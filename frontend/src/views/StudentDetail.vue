@@ -23,6 +23,7 @@
       <div class="actions">
         <el-button-group>
           <el-button type="primary" plain @click="openDialog('screen')">现场筛查/补检</el-button>
+          <el-button type="warning" plain @click="openDialog('retestInit')">发起二次复测</el-button>
           <el-button type="primary" plain @click="openDialog('review')">学校复核</el-button>
           <el-button type="primary" plain @click="openDialog('notify')">家长告知</el-button>
           <el-button type="primary" plain @click="openDialog('choice')">家长确认选择</el-button>
@@ -53,29 +54,90 @@
       <el-col :span="13">
         <el-card>
           <el-tabs v-model="tab">
-            <el-tab-pane label="筛查记录" name="screen">
-              <el-descriptions v-if="d.latestScreen" :column="2" border size="small">
-                <el-descriptions-item label="筛查日期">{{ d.latestScreen.screenDate }}</el-descriptions-item>
-                <el-descriptions-item label="请假未检">
-                  <el-tag v-if="d.latestScreen.absent" type="danger">是</el-tag>
-                  <span v-else>否</span>
-                </el-descriptions-item>
-                <el-descriptions-item label="裸眼视力(左/右)">{{ d.latestScreen.nakedVisionLeft }} / {{ d.latestScreen.nakedVisionRight }}</el-descriptions-item>
-                <el-descriptions-item label="球镜(左/右)">{{ d.latestScreen.sphereLeft }} / {{ d.latestScreen.sphereRight }}</el-descriptions-item>
-                <el-descriptions-item label="散光柱镜(左/右)">{{ d.latestScreen.cylinderLeft }} / {{ d.latestScreen.cylinderRight }}</el-descriptions-item>
-                <el-descriptions-item label="是否戴镜">{{ d.latestScreen.wearingGlasses ? '是' : '否' }}</el-descriptions-item>
-                <el-descriptions-item label="设备校准编号">{{ d.latestScreen.deviceCalibNo }}</el-descriptions-item>
-                <el-descriptions-item label="操作人">{{ d.latestScreen.orgName }} {{ d.latestScreen.operatorName }}</el-descriptions-item>
-                <el-descriptions-item label="复测建议">
-                  <el-tag v-if="d.latestScreen.retestNeeded" type="warning">需要复测</el-tag><span v-else>否</span>
-                </el-descriptions-item>
-                <el-descriptions-item label="判定">
-                  <el-tag v-if="d.latestScreen.abnormal" type="danger">异常：{{ d.latestScreen.abnormalReason }}</el-tag>
-                  <el-tag v-else type="success">正常</el-tag>
-                </el-descriptions-item>
-                <el-descriptions-item label="用眼习惯问卷" :span="2">{{ d.latestScreen.habitSummary || '—' }}</el-descriptions-item>
-              </el-descriptions>
-              <el-empty v-else description="暂无筛查记录" :image-size="60" />
+            <el-tab-pane label="筛查与复测记录" name="screen">
+              <el-timeline>
+                <el-timeline-item v-for="s in (d.screens?.length ? d.screens : [d.latestScreen].filter(Boolean))" :key="s.id"
+                                  :timestamp="s.screenDate" placement="top">
+                  <el-tag size="small" :type="s.screenRound==='RETEST'?'warning':'primary'" style="margin-right:6px">
+                    {{ s.screenRoundLabel }}
+                  </el-tag>
+                  <el-tag size="small" :type="s.abnormal?'danger':'success'" style="margin-right:6px">
+                    {{ s.absent ? '请假未检' : s.abnormal ? '异常' : '正常' }}
+                  </el-tag>
+                  <span style="font-size:13px">
+                    裸眼视力 {{ s.nakedVisionLeft || '—' }}/{{ s.nakedVisionRight || '—' }}，
+                    球镜 {{ s.sphereLeft || '—' }}/{{ s.sphereRight || '—' }}，
+                    散光 {{ s.cylinderLeft || '—' }}/{{ s.cylinderRight || '—' }}
+                  </span>
+                  <div class="muted" style="font-size:12px;margin-top:2px">
+                    设备 {{ s.deviceCalibNo || '—' }} ｜ 场地 {{ s.venue || '—' }} ｜
+                    {{ s.orgName }} {{ s.operatorName }} ｜ 戴镜 {{ s.wearingGlasses ? '是' : '否' }}
+                  </div>
+                  <div v-if="s.abnormalReason" class="muted" style="font-size:12px;color:#f56c6c">{{ s.abnormalReason }}</div>
+                </el-timeline-item>
+              </el-timeline>
+              <el-empty v-if="!(d.screens?.length) && !d.latestScreen" description="暂无筛查记录" :image-size="60" />
+
+              <!-- 二次确认复测卡片 -->
+              <el-divider content-position="left">
+                <el-tag type="warning" effect="plain">异常二次确认（复测）</el-tag>
+              </el-divider>
+              <div v-for="r in (d.retests || [])" :key="r.id" style="margin-bottom:10px">
+                <el-card shadow="never">
+                  <div>
+                    <el-tag size="small" :type="r.conclusion==='NORMAL'?'success':r.conclusion==='ABNORMAL'?'danger':'warning'">
+                      {{ r.statusLabel }}
+                    </el-tag>
+                    <el-tag size="small" type="info" style="margin-left:6px">复测原因：{{ r.reasonLabel }}</el-tag>
+                    <span class="muted" style="margin-left:8px;font-size:12px">发起：{{ r.initiatedBy }} {{ fmt(r.initiatedAt) }}</span>
+                  </div>
+                  <div class="muted" style="font-size:12px;margin:4px 0">{{ r.reasonDetail }}</div>
+                  <el-descriptions :column="2" size="small" border style="margin-top:6px">
+                    <el-descriptions-item label="首次设备/视力">
+                      {{ r.originalScreen.deviceCalibNo }} ｜ {{ r.originalScreen.nakedVisionLeft }}/{{ r.originalScreen.nakedVisionRight }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="复测设备/视力">
+                      <template v-if="r.retestScreen">
+                        {{ r.retestScreen.deviceCalibNo }} ｜ {{ r.retestScreen.nakedVisionLeft }}/{{ r.retestScreen.nakedVisionRight }}
+                      </template>
+                      <span v-else class="muted">待录入复测数据</span>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="复测操作人">{{ r.retestOperatorName || '—' }}</el-descriptions-item>
+                    <el-descriptions-item label="复测场地">{{ r.retestScreen?.venue || '—' }}</el-descriptions-item>
+                    <el-descriptions-item label="复测结论（同步家长档案）" :span="2">{{ r.conclusionNote || '待复测' }}</el-descriptions-item>
+                  </el-descriptions>
+                </el-card>
+              </div>
+              <div v-if="canRetestNow" style="margin-top:8px">
+                <el-button type="warning" size="small" @click="openDialog('retestInit')">在原记录上发起复测</el-button>
+                <el-button v-if="pendingRetest" type="primary" size="small"
+                  @click="openDialog('retestSubmit', { retestId: pendingRetest.id,
+                    deviceCalibNo: d.latestScreen?.deviceCalibNo, venue: d.latestScreen?.venue })">
+                  录入待办复测结果
+                </el-button>
+              </div>
+
+              <!-- 转诊任务留痕 -->
+              <el-divider content-position="left">
+                <el-tag type="success" effect="plain">家长复诊提醒（转诊任务）</el-tag>
+              </el-divider>
+              <el-timeline v-if="d.referrals?.length">
+                <el-timeline-item v-for="t in d.referrals" :key="t.id" placement="top">
+                  <el-tag size="small" :type="t.status==='VISITED'?'success':t.status==='CLOSED'?'info':t.status==='CONFIRMED'?'primary':'warning'">
+                    {{ t.statusLabel }}
+                  </el-tag>
+                  <span class="muted" style="margin-left:6px;font-size:12px">来源：{{ t.sourceLabel }}</span>
+                  <div style="font-size:13px;margin-top:2px">
+                    <template v-if="t.notified">
+                      家长通知已发出（{{ t.notifyChannel }}，{{ fmt(t.notifyTime) }}）——记录保留不可删除
+                    </template>
+                    <span v-else class="muted">尚未通知家长</span>
+                    <span v-if="t.targetOrg"> ｜ 复诊机构：{{ t.targetOrg }}</span>
+                  </div>
+                  <div v-if="t.closeNote" class="muted" style="font-size:12px;color:#67c23a">关闭原因：{{ t.closeNote }}</div>
+                </el-timeline-item>
+              </el-timeline>
+              <el-empty v-else description="暂无转诊任务" :image-size="50" />
             </el-tab-pane>
 
             <el-tab-pane :label="`复诊处方(${d.visits?.length || 0})`" name="visit">
@@ -186,7 +248,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { api } from '../api'
@@ -204,7 +266,25 @@ const load = async () => {
 }
 const reload = async () => { await load(); ElMessage.success('操作已记录到健康管理时间线') }
 
-const openDialog = (name) => dialogs.value.open(name)
+// 当前待录入结果的复测（PENDING）
+const pendingRetest = computed(() =>
+  (d.value.retests || []).find(r => r.status === 'PENDING') || null)
+// 是否可在原记录上发起复测：存在异常首筛、且无待办复测
+const canRetestNow = computed(() => {
+  const hasAbnormalFirst = (d.value.screens || []).some(s => s.screenRound !== 'RETEST' && s.abnormal)
+  return hasAbnormalFirst || !!pendingRetest.value
+})
+
+const openDialog = (name, ctx) => {
+  if (name === 'retestSubmit' && !ctx && pendingRetest.value) {
+    ctx = {
+      retestId: pendingRetest.value.id,
+      deviceCalibNo: pendingRetest.value.originalScreen?.deviceCalibNo,
+      venue: pendingRetest.value.originalScreen?.venue
+    }
+  }
+  dialogs.value.open(name, ctx)
+}
 const fmt = (t) => t ? t.replace('T', ' ').substring(0, 16) : ''
 const dotType = (t) => ({
   SCREEN: 'primary', VISIT: 'success', PRESCRIPTION: 'success', SUBSIDY: 'warning',

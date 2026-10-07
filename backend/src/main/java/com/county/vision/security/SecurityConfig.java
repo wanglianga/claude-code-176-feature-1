@@ -46,8 +46,8 @@ public class SecurityConfig {
                         .requestMatchers("/", "/assets/**", "/favicon.ico", "/index.html").permitAll()
                         // 前端单页 history 路由
                         .requestMatchers("/login", "/dashboard", "/students", "/students/**",
-                                "/screening", "/review", "/parent", "/visit", "/subsidy",
-                                "/followup", "/issues").permitAll()
+                                "/screening", "/review", "/retest", "/parent", "/my-child",
+                                "/visit", "/subsidy", "/followup", "/issues").permitAll()
                         .anyRequest().authenticated())
                 .headers(h -> h.frameOptions(f -> f.sameOrigin()))
                 .exceptionHandling(eh -> eh.authenticationEntryPoint((req, resp, ex) -> {

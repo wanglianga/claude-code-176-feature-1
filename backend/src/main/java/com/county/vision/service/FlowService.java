@@ -32,13 +32,14 @@ public class FlowService {
     private final InterventionRepository interventionRepo;
     private final IssueTrackerRepository issueRepo;
     private final TimelineService timeline;
+    private final ReferralService referralService;
 
     public FlowService(StudentRepository studentRepo, ScreenRecordRepository screenRepo,
                        SchoolReviewRepository reviewRepo, ParentConfirmationRepository confirmRepo,
                        VisitRecordRepository visitRepo, GlassesRecordRepository glassesRepo,
                        SubsidyApplicationRepository subsidyRepo, ReviewFollowUpRepository followupRepo,
                        InterventionRepository interventionRepo, IssueTrackerRepository issueRepo,
-                       TimelineService timeline) {
+                       TimelineService timeline, ReferralService referralService) {
         this.studentRepo = studentRepo;
         this.screenRepo = screenRepo;
         this.reviewRepo = reviewRepo;
@@ -50,6 +51,7 @@ public class FlowService {
         this.interventionRepo = interventionRepo;
         this.issueRepo = issueRepo;
         this.timeline = timeline;
+        this.referralService = referralService;
     }
 
     private Student requireStudent(Long id) {
@@ -67,6 +69,7 @@ public class FlowService {
         rec.setOrgName(req.getOrgName());
         rec.setOperatorName(req.getOperatorName());
         rec.setDeviceCalibNo(req.getDeviceCalibNo());
+        rec.setVenue(req.getVenue());
         rec.setNakedVisionLeft(req.getNakedVisionLeft());
         rec.setNakedVisionRight(req.getNakedVisionRight());
         rec.setSphereLeft(req.getSphereLeft());
@@ -79,10 +82,15 @@ public class FlowService {
 
         boolean absent = Boolean.TRUE.equals(req.getAbsent());
         rec.setAbsent(absent);
-        boolean abnormal = !absent && judgeAbnormal(req);
+        rec.setScreenRound("FIRST");
+        boolean abnormal = !absent && ScreenJudge.judgeAbnormal(
+                req.getNakedVisionLeft(), req.getNakedVisionRight(),
+                req.getSphereLeft(), req.getSphereRight());
         rec.setAbnormal(abnormal);
         if (abnormal) {
-            rec.setAbnormalReason(buildAbnormalReason(req));
+            rec.setAbnormalReason(ScreenJudge.buildAbnormalReason(
+                    req.getNakedVisionLeft(), req.getNakedVisionRight(),
+                    req.getSphereLeft(), req.getSphereRight()));
         }
         ScreenRecord saved = screenRepo.save(rec);
 
@@ -94,12 +102,13 @@ public class FlowService {
         }
 
         timeline.event(s, EventType.SCREEN,
-                String.format("完成视力筛查：裸眼视力 左%s/右%s，球镜 左%s/右%s，散光 左%s/右%s，戴镜=%s，设备校准编号=%s%s",
+                String.format("完成视力筛查：裸眼视力 左%s/右%s，球镜 左%s/右%s，散光 左%s/右%s，戴镜=%s，设备校准编号=%s，场地=%s%s",
                         nz(req.getNakedVisionLeft()), nz(req.getNakedVisionRight()),
                         nz(req.getSphereLeft()), nz(req.getSphereRight()),
                         nz(req.getCylinderLeft()), nz(req.getCylinderRight()),
                         rec.getWearingGlasses() ? "是" : "否", nz(req.getDeviceCalibNo()),
-                        abnormal ? "，判定异常" : ""));
+                        nz(req.getVenue()),
+                        abnormal ? "，判定异常（待学校健康老师二次确认，确认前不推送家长）" : ""));
 
         if (abnormal) {
             timeline.changeStage(s, StudentStage.ABNORMAL_REVIEW);
@@ -112,43 +121,7 @@ public class FlowService {
         return saved;
     }
 
-    /** 简单判定：任一眼裸眼视力低于 5.0(标准对数) 或 球镜 <= -0.50D 视为异常 */
-    private boolean judgeAbnormal(RecordDtos.ScreenRequest req) {
-        if (belowVision(req.getNakedVisionLeft()) || belowVision(req.getNakedVisionRight())) return true;
-        if (myopicSphere(req.getSphereLeft()) || myopicSphere(req.getSphereRight())) return true;
-        return false;
-    }
-
-    private boolean belowVision(String v) {
-        if (v == null || v.isBlank()) return false;
-        try {
-            double d = Double.parseDouble(v.trim());
-            // 兼容 5 分记录（4.9 以下）和小数记录（1.0 以下）
-            return (d > 2 && d < 4.9) || (d <= 2 && d < 1.0);
-        } catch (NumberFormatException e) {
-            return false;
-        }
-    }
-
-    private boolean myopicSphere(String sph) {
-        if (sph == null || sph.isBlank()) return false;
-        try {
-            return Double.parseDouble(sph.replace("D", "").trim()) <= -0.50;
-        } catch (NumberFormatException e) {
-            return false;
-        }
-    }
-
-    private String buildAbnormalReason(RecordDtos.ScreenRequest req) {
-        StringBuilder sb = new StringBuilder();
-        if (belowVision(req.getNakedVisionLeft()) || belowVision(req.getNakedVisionRight())) {
-            sb.append("裸眼视力低于4.9；");
-        }
-        if (myopicSphere(req.getSphereLeft()) || myopicSphere(req.getSphereRight())) {
-            sb.append("球镜度数提示近视；");
-        }
-        return sb.toString();
-    }
+    /** 异常判定逻辑见 {@link ScreenJudge}（首次筛查与二次复测共用同一标准） */
 
     private String nz(String s) {
         return s == null || s.isBlank() ? "—" : s;
@@ -170,6 +143,8 @@ public class FlowService {
         switch (req.getResult()) {
             case "CONFIRM" -> {
                 timeline.event(s, EventType.SCHOOL_REVIEW, "学校健康老师复核确认筛查异常：" + nz(req.getOpinion()));
+                // 复核确认才生成家长复诊提醒；同一学生幂等复用，避免重复任务
+                referralService.ensureFromReview(s);
                 timeline.changeStage(s, StudentStage.AWAIT_PARENT);
             }
             case "REJECT" -> {
@@ -208,6 +183,8 @@ public class FlowService {
         } else {
             pc.setNotified(true);
             pc.setNotifyTime(LocalDateTime.now());
+            // 转诊任务上留痕家长复诊通知（渠道/时间），通知记录不可删除
+            referralService.markNotified(s, req.getChannel());
             timeline.event(s, EventType.NOTIFY, "已通过" + nz(req.getChannel()) + "向家长告知筛查异常结果"
                     + (req.getRemark() == null ? "" : "：" + req.getRemark()));
         }
@@ -249,6 +226,11 @@ public class FlowService {
 
         // 电话接通确认后，闭环“无法接通”事项
         issueCloseIfOpen(s, ScreenFlag.UNREACHABLE, "家长已接通并完成确认");
+
+        // 家长确认复诊机构：转诊任务推进为已确认，复诊任务不会被重复创建
+        if (choice == ParentChoice.COUNTY_HOSPITAL || choice == ParentChoice.PARTNER_CLINIC) {
+            referralService.markConfirmed(s, req.getTargetOrg());
+        }
 
         timeline.event(s, EventType.PARENT_CONFIRM, "家长确认异常结果，选择：" + choice.getLabel()
                 + (req.getTargetOrg() == null ? "" : "（" + req.getTargetOrg() + "）")
@@ -312,6 +294,8 @@ public class FlowService {
         } else {
             timeline.changeStage(s, StudentStage.VISITED);
         }
+        // 医院回写后，对应家长复诊提醒任务结案（记录保留）
+        referralService.markVisited(s);
 
         // 自动建立下次复查计划
         if (req.getReviewCycleMonths() != null && req.getReviewCycleMonths() > 0) {

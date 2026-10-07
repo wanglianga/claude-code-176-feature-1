@@ -25,6 +25,41 @@ public class RecordDtos {
         private String habitSummary;
         private Boolean retestNeeded;
         private Boolean absent;
+        /** 筛查场地（校医室/阶梯教室/操场等），用于按场地识别连续异常 */
+        private String venue;
+    }
+
+    @Data
+    public static class RetestInitiateRequest {
+        /** 在原异常筛查记录上发起；与 studentId 二选一（传 studentId 时取最近一次异常首筛） */
+        private Long originalScreenId;
+        private Long studentId;
+        /** 复测原因 RetestReason：DEVICE_BLOCK/WEAR_IRREGULAR/ENV_LIGHT/STATE_FLUCTUATION/OTHER */
+        @NotNull(message = "复测原因不能为空")
+        private String reason;
+        /** 现场情况补充（设备遮挡/佩戴/光线的具体描述） */
+        private String reasonDetail;
+    }
+
+    @Data
+    public static class RetestSubmitRequest {
+        @NotNull(message = "复测记录ID不能为空")
+        private Long retestId;
+        private LocalDate retestDate;
+        private String orgName;
+        private String operatorName;
+        private String deviceCalibNo;
+        private String venue;
+        private String nakedVisionLeft;
+        private String nakedVisionRight;
+        private String sphereLeft;
+        private String sphereRight;
+        private String cylinderLeft;
+        private String cylinderRight;
+        private Boolean wearingGlasses;
+        private String habitSummary;
+        /** 复测结论补充说明（将同步到家长可见档案） */
+        private String conclusionNote;
     }
 
     @Data

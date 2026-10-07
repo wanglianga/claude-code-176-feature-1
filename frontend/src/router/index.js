@@ -17,6 +17,8 @@ const routes = [
         meta: { icon: 'View', roles: ['ADMIN', 'SCREEN_ORG', 'SCHOOL_DOCTOR'] } },
       { path: 'review', name: '复核与干预', component: () => import('../views/Review.vue'),
         meta: { icon: 'CircleCheck', roles: ['ADMIN', 'SCHOOL_DOCTOR', 'TEACHER', 'GOV_EDU', 'GOV_HEALTH'] } },
+      { path: 'retest', name: '二次复测与复测比例', component: () => import('../views/Retest.vue'),
+        meta: { icon: 'Aim', roles: ['ADMIN', 'SCHOOL_DOCTOR', 'GOV_EDU', 'GOV_HEALTH', 'TEACHER'] } },
       { path: 'parent', name: '家长告知确认', component: () => import('../views/Parent.vue'),
         meta: { icon: 'ChatDotRound', roles: ['ADMIN', 'SCHOOL_DOCTOR', 'TEACHER'] } },
       { path: 'visit', name: '复诊处方', component: () => import('../views/Visit.vue'),
@@ -26,7 +28,9 @@ const routes = [
       { path: 'followup', name: '复查随访', component: () => import('../views/Followup.vue'),
         meta: { icon: 'Calendar', roles: ['ADMIN', 'HOSPITAL', 'CLINIC', 'SCHOOL_DOCTOR', 'TEACHER', 'GOV_HEALTH'] } },
       { path: 'issues', name: '异常事项台账', component: () => import('../views/Issues.vue'),
-        meta: { icon: 'Warning', roles: ['ADMIN', 'GOV_EDU', 'GOV_HEALTH', 'SCHOOL_DOCTOR', 'TEACHER', 'SCREEN_ORG', 'HOSPITAL', 'CLINIC'] } }
+        meta: { icon: 'Warning', roles: ['ADMIN', 'GOV_EDU', 'GOV_HEALTH', 'SCHOOL_DOCTOR', 'TEACHER', 'SCREEN_ORG', 'HOSPITAL', 'CLINIC'] } },
+      { path: 'my-child', name: '孩子视力档案（家长）', component: () => import('../views/ParentArchive.vue'),
+        meta: { icon: 'Notebook', roles: ['ADMIN', 'PARENT'] } }
     ]
   }
 ]
@@ -41,7 +45,9 @@ router.beforeEach((to) => {
   const user = raw ? JSON.parse(raw) : null
   if (to.meta.public) return true
   if (!user) return '/login'
-  if (to.meta.roles && !to.meta.roles.includes(user.role)) return '/dashboard'
+  if (to.meta.roles && !to.meta.roles.includes(user.role)) {
+    return user.role === 'PARENT' ? '/my-child' : '/dashboard'
+  }
   return true
 })
 

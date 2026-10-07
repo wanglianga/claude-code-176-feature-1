@@ -58,4 +58,10 @@ public class StatsController {
                                                               @RequestParam(required = false) Long regionId) {
         return ApiResponse.ok(stats.stageFunnel(schoolId, regionId));
     }
+
+    @Operation(summary = "二次复测比例分析（按班级/设备/场地，区分学生个体问题与设备、光线、现场组织问题）")
+    @GetMapping("/retest")
+    public ApiResponse<Map<String, Object>> retestStats(@RequestParam(required = false) Long schoolId) {
+        return ApiResponse.ok(stats.retestStats(schoolId));
+    }
 }

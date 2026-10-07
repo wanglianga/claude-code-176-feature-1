@@ -25,6 +25,9 @@ public class ScreenRecord extends BaseEntity {
     /** 设备校准编号 */
     private String deviceCalibNo;
 
+    /** 筛查场地（如校医室/阶梯教室/操场），用于按场地识别连续异常 */
+    private String venue;
+
     /** 裸眼视力（小数记录，左右） */
     private String nakedVisionLeft;
     private String nakedVisionRight;
@@ -56,4 +59,8 @@ public class ScreenRecord extends BaseEntity {
 
     /** 当次请假未检 */
     private Boolean absent = false;
+
+    /** 筛查轮次：FIRST=年度首次筛查；RETEST=二次确认复测 */
+    @Column(length = 16)
+    private String screenRound = "FIRST";
 }

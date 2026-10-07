@@ -18,6 +18,8 @@ export const api = {
   importTemplateUrl: '/api/students/import-template',
 
   screen: (data) => http.post('/api/flow/screen', data),
+  retestInitiate: (data) => http.post('/api/flow/retest/initiate', data),
+  retestSubmit: (data) => http.post('/api/flow/retest/submit', data),
   schoolReview: (data) => http.post('/api/flow/school-review', data),
   notify: (data) => http.post('/api/flow/notify', data),
   parentChoice: (data) => http.post('/api/flow/parent-choice', data),
@@ -34,8 +36,12 @@ export const api = {
   issues: (status) => http.get('/api/ledger/issues', { params: { status } }),
   followups: (status) => http.get('/api/ledger/followups', { params: { status } }),
   subsidies: (status) => http.get('/api/ledger/subsidies', { params: { status } }),
+  retests: (status) => http.get('/api/ledger/retests', { params: { status } }),
+  referrals: (status) => http.get('/api/ledger/referrals', { params: { status } }),
 
   overview: (params) => http.get('/api/stats/overview', { params }),
+  myChild: () => http.get('/api/parent/my-child'),
+  retestStats: (schoolId) => http.get('/api/stats/retest', { params: { schoolId } }),
   trendGrade: (params) => http.get('/api/stats/trend-grade', { params }),
   bySchool: (regionId) => http.get('/api/stats/by-school', { params: { regionId } }),
   byRegion: () => http.get('/api/stats/by-region'),

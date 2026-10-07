@@ -6,6 +6,7 @@ import com.county.vision.domain.enums.ScreenFlag;
 import com.county.vision.domain.repository.*;
 import com.county.vision.dto.RecordDtos;
 import com.county.vision.service.FlowService;
+import com.county.vision.service.RetestService;
 import com.county.vision.service.TimelineService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -38,12 +39,13 @@ public class DataSeeder implements ApplicationRunner {
     private final PasswordEncoder encoder;
     private final FlowService flow;
     private final TimelineService timeline;
+    private final RetestService retestSvc;
 
     public DataSeeder(UserAccountRepository userRepo, RegionRepository regionRepo,
                       SchoolRepository schoolRepo, GradeClassRepository classRepo,
                       StudentRepository studentRepo, IssueTrackerRepository issueRepo,
                       PasswordEncoder encoder,
-                      FlowService flow, TimelineService timeline) {
+                      FlowService flow, TimelineService timeline, RetestService retestSvc) {
         this.userRepo = userRepo;
         this.regionRepo = regionRepo;
         this.schoolRepo = schoolRepo;
@@ -53,6 +55,7 @@ public class DataSeeder implements ApplicationRunner {
         this.encoder = encoder;
         this.flow = flow;
         this.timeline = timeline;
+        this.retestSvc = retestSvc;
     }
 
     @Override
@@ -79,7 +82,7 @@ public class DataSeeder implements ApplicationRunner {
         account("screener", pwd, "县视光中心-筛查队", Role.SCREEN_ORG, null, "阳光县视光中心", "13900000004");
         account("hospital", pwd, "县人民医院-眼科", Role.HOSPITAL, null, "阳光县人民医院眼科", "13900000005");
         account("clinic", pwd, "爱眼合作眼科门诊", Role.CLINIC, null, "爱眼眼科门诊", "13900000006");
-        account("parent", pwd, "张爸爸", Role.PARENT, null, null, "13800001111");
+        account("parent", pwd, "沈妈妈（复测正常关闭转诊演示）", Role.PARENT, null, null, "13800011200");
 
         int year = LocalDate.now().getYear();
 
@@ -296,7 +299,87 @@ public class DataSeeder implements ApplicationRunner {
                 true, new BigDecimal("540.00"), "1.56镜片", false, null));
         flow.addIntervention(intervention(han.getId(), "PARENT_REMIND", d(2026, 10, 6), "提醒家长督促每日2小时户外活动"));
 
-        log.info("种子数据初始化完成：3 个片区、4 所学校、10 个角色账号、16 名学生场景样例（含 3 个已闭环样例）");
+        /* ================= 二次确认复测样例 =================
+         * 同一台便携设备 DEV-2026-0077 + 同一靠窗场地“阶梯教室”连续出现异常，
+         * 复测换到已校准主机 DEV-2026-0091、校医室后多数恢复正常（设备/光线/现场组织问题），
+         * 个别学生复测仍异常（学生个体问题）。 */
+        GradeClass g41 = grade(s1, "四年级", "1班");
+
+        // ---- 17. 阶梯教室靠窗逆光，复测恢复正常（许晴，三年级3班；环境光线）----
+        Student xu = student(s1, gc33, "2024030317", "许晴", "女",
+                LocalDate.of(2014, 4, 12), "许妈妈", "13800010777", null, year);
+        flow.submitScreen(screenAt(xu.getId(), "4.5", "4.6", "-1.75", "-1.50",
+                "DEV-2026-0077", "阶梯教室", d(2026, 9, 17), "现场靠窗逆光，学生眯眼"));
+        Long xuRetest = startRetest(xu.getId(), "ENV_LIGHT",
+                "阶梯教室靠窗逆光，筛查设备 DEV-2026-0077 连续读数偏低，改到校医室复测");
+        finishRetest(xuRetest, "DEV-2026-0091", "校医室",
+                "5.0", "5.0", "0.00", "0.00", d(2026, 9, 17),
+                "更换场地、遮蔽杂光后双眼视力正常", "筛查队-小马");
+
+        // ---- 18. 复核确认已生成转诊，发现同设备连续异常后复测正常→关闭转诊（蒋琳，四年级1班；设备遮挡）----
+        Student jiang = student(s1, g41, "2024040118", "蒋琳", "女",
+                LocalDate.of(2013, 9, 2), "蒋爸爸", "13800010888", null, year);
+        flow.submitScreen(screenAt(jiang.getId(), "4.6", "4.4", "-1.25", "-2.00",
+                "DEV-2026-0077", "阶梯教室", d(2026, 9, 17), "镜头疑似被头发/手部遮挡"));
+        flow.schoolReview(review(jiang.getId(), "CONFIRM", "初判异常，先建转诊待告知"));
+        Long jiangRetest = startRetest(jiang.getId(), "DEVICE_BLOCK",
+                "发现 DEV-2026-0077 当天连续多人异常，遮挡报警多次，复测核实后再决定是否通知家长");
+        finishRetest(jiangRetest, "DEV-2026-0091", "校医室",
+                "5.0", "4.9", "0.00", "-0.25", d(2026, 9, 17),
+                "清洁镜头、规范佩戴后复测达标", "健康老师 李校医");
+
+        // ---- 19. 同一设备初筛异常，换设备复测仍异常→学生个体问题，走完转诊复诊（邓超，四年级1班）----
+        Student deng = student(s1, g41, "2024040119", "邓超", "男",
+                LocalDate.of(2013, 12, 21), "邓妈妈", "13800010999", null, year);
+        flow.submitScreen(screenAt(deng.getId(), "4.4", "4.5", "-2.00", "-1.75",
+                "DEV-2026-0077", "阶梯教室", d(2026, 9, 17), "读写距离过近"));
+        Long dengRetest = startRetest(deng.getId(), "WEAR_IRREGULAR",
+                "首次检查下颌未贴紧颌托，规范佩戴后用校准主机复测确认");
+        finishRetest(dengRetest, "DEV-2026-0091", "校医室",
+                "4.5", "4.5", "-2.00", "-1.75", d(2026, 9, 17),
+                "规范佩戴、换校准设备后仍异常，判定为学生个体视力问题", "筛查队-小马");
+        flow.notifyParent(notify(deng.getId(), "短信+APP", false, "二次复测仍异常后推送家长（首次结果未单独推送）"));
+        flow.parentChoice(choice(deng.getId(), "COUNTY_HOSPITAL", "阳光县人民医院眼科", null, null));
+        flow.submitVisit(visit(deng.getId(), "阳光县人民医院眼科", "刘医生", d(2026, 9, 24),
+                true, false, "-2.00", "-1.75", null, null, null, null, "60",
+                "双眼近视，复测与复诊一致", 6, true, false, null));
+
+        // ---- 20. 阶梯教室便携设备异常、复测正常（谷雨，三年级3班；佩戴不规范）----
+        Student gu = student(s1, gc33, "2024030320", "谷雨", "女",
+                LocalDate.of(2014, 6, 30), "谷妈妈", "13800011000", null, year);
+        flow.submitScreen(screenAt(gu.getId(), "4.6", "4.7", "-1.50", "-1.00",
+                "DEV-2026-0077", "阶梯教室", d(2026, 9, 17), "首次摘镜后未适应、站位偏斜"));
+        Long guRetest = startRetest(gu.getId(), "WEAR_IRREGULAR",
+                "首次佩戴/站位不规范，现场调整后复测");
+        finishRetest(guRetest, "DEV-2026-0091", "校医室",
+                "5.0", "5.0", "0.00", "0.00", d(2026, 9, 17),
+                "调整坐姿与佩戴位置后复测正常", "健康老师 李校医");
+
+        // ---- 21. 复测仍异常、转诊任务待告知（韩磊，四年级1班；学生状态波动）----
+        Student hanlei = student(s1, g41, "2024040121", "韩磊", "男",
+                LocalDate.of(2013, 3, 14), "韩爸爸", "13800011100", null, year);
+        flow.submitScreen(screenAt(hanlei.getId(), "4.6", "4.6", "-1.50", "-1.50",
+                "DEV-2026-0091", "校医室", d(2026, 9, 18), "首次检查紧张"));
+        Long hanleiRetest = startRetest(hanlei.getId(), "STATE_FLUCTUATION",
+                "首次检查紧张配合度差，安抚后复测确认");
+        finishRetest(hanleiRetest, "DEV-2026-0091", "校医室",
+                "4.6", "4.7", "-1.50", "-1.25", d(2026, 9, 18),
+                "状态稳定后复测仍异常，需家长带往复诊", "筛查队-小马");
+
+        // ---- 22. 已电话告知家长后发现同设备连续异常，复测正常：关闭转诊，已发通知留痕不删除（沈婷，三年级3班）----
+        Student shenting = student(s1, gc33, "2024030322", "沈婷", "女",
+                LocalDate.of(2014, 9, 25), "沈妈妈", "13800011200", null, year);
+        flow.submitScreen(screenAt(shenting.getId(), "4.5", "4.6", "-1.75", "-1.50",
+                "DEV-2026-0077", "阶梯教室", d(2026, 9, 17), "首次检查现场较嘈杂"));
+        flow.schoolReview(review(shenting.getId(), "CONFIRM", "初判异常，先电话告知家长"));
+        flow.notifyParent(notify(shenting.getId(), "电话", false, "已电话告知家长复诊（通知已发出）"));
+        Long shentingRetest = startRetest(shenting.getId(), "DEVICE_BLOCK",
+                "告知后排查发现 DEV-2026-0077 镜头被遮挡、当天连续异常，复测核实");
+        finishRetest(shentingRetest, "DEV-2026-0091", "校医室",
+                "5.0", "5.0", "0.00", "0.00", d(2026, 9, 18),
+                "复测正常，再次电话向家长说明系设备遮挡误判，结论同步家长档案", "健康老师 李校医");
+
+        log.info("种子数据初始化完成：3 个片区、4 所学校、10 个角色账号、22 名学生场景样例（含二次复测分流与设备/场地连续异常样例）");
     }
 
     /** 闭环某学生当前未处理的指定类型异常事项 */
@@ -334,11 +417,59 @@ public class DataSeeder implements ApplicationRunner {
         r.setHabitSummary(habit);
         r.setRetestNeeded(retest);
         r.setAbsent(false);
+        r.setVenue("校医室");
         return r;
     }
 
-    private RecordDtos.SchoolReviewRequest review(Long sid, String result, String opinion) {
-        RecordDtos.SchoolReviewRequest r = new RecordDtos.SchoolReviewRequest();
+    /** 指定设备编号与场地的首筛（用于设备/场地连续异常样例） */
+    private RecordDtos.ScreenRequest screenAt(Long sid, String vl, String vr, String sl, String sr,
+                                              String device, String venue, LocalDate date, String habit) {
+        RecordDtos.ScreenRequest r = new RecordDtos.ScreenRequest();
+        r.setStudentId(sid);
+        r.setScreenDate(date);
+        r.setOrgName("阳光县视光中心");
+        r.setOperatorName("筛查队-小马");
+        r.setDeviceCalibNo(device);
+        r.setVenue(venue);
+        r.setNakedVisionLeft(vl);
+        r.setNakedVisionRight(vr);
+        r.setSphereLeft(sl);
+        r.setSphereRight(sr);
+        r.setWearingGlasses(false);
+        r.setHabitSummary(habit);
+        r.setRetestNeeded(false);
+        r.setAbsent(false);
+        return r;
+    }
+
+    private Long startRetest(Long sid, String reason, String detail) {
+        RecordDtos.RetestInitiateRequest req = new RecordDtos.RetestInitiateRequest();
+        req.setStudentId(sid);
+        req.setReason(reason);
+        req.setReasonDetail(detail);
+        return retestSvc.initiate(req).getId();
+    }
+
+    private void finishRetest(Long retestId, String device, String venue,
+                              String vl, String vr, String sl, String sr, LocalDate date,
+                              String note, String operator) {
+        RecordDtos.RetestSubmitRequest req = new RecordDtos.RetestSubmitRequest();
+        req.setRetestId(retestId);
+        req.setRetestDate(date);
+        req.setOrgName("阳光县视光中心");
+        req.setOperatorName(operator);
+        req.setDeviceCalibNo(device);
+        req.setVenue(venue);
+        req.setNakedVisionLeft(vl);
+        req.setNakedVisionRight(vr);
+        req.setSphereLeft(sl);
+        req.setSphereRight(sr);
+        req.setWearingGlasses(false);
+        req.setConclusionNote(note);
+        retestSvc.submit(req);
+    }
+
+    private RecordDtos.SchoolReviewRequest review(Long sid, String result, String opinion) {        RecordDtos.SchoolReviewRequest r = new RecordDtos.SchoolReviewRequest();
         r.setStudentId(sid);
         r.setResult(result);
         r.setOpinion(opinion);

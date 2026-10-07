@@ -50,6 +50,7 @@ const accounts = [
   { u: 'screener', label: '筛查机构', type: 'info' },
   { u: 'hospital', label: '县医院', type: 'danger' },
   { u: 'clinic', label: '合作门诊', type: 'danger' },
+  { u: 'parent', label: '家长', type: 'success' },
   { u: 'admin', label: '管理员', type: '' }
 ]
 
@@ -62,7 +63,7 @@ const doLogin = async () => {
     const data = await login(form)
     auth.setLogin(data)
     ElMessage.success(`欢迎，${data.realName}`)
-    router.push('/dashboard')
+    router.push(data.role === 'PARENT' ? '/my-child' : '/dashboard')
   } finally {
     loading.value = false
   }

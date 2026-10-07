@@ -6,6 +6,7 @@
         <el-row :gutter="10">
           <el-col :span="12"><el-form-item label="筛查日期"><el-date-picker v-model="f.screen.screenDate" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item></el-col>
           <el-col :span="12"><el-form-item label="设备校准编号"><el-input v-model="f.screen.deviceCalibNo" placeholder="如 DEV-2026-0091"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="筛查场地"><el-input v-model="f.screen.venue" placeholder="如 校医室/阶梯教室/操场"/></el-form-item></el-col>
           <el-col :span="12"><el-form-item label="裸眼视力 左"><el-input v-model="f.screen.nakedVisionLeft" placeholder="如 4.6"/></el-form-item></el-col>
           <el-col :span="12"><el-form-item label="裸眼视力 右"><el-input v-model="f.screen.nakedVisionRight" placeholder="如 4.7"/></el-form-item></el-col>
           <el-col :span="12"><el-form-item label="球镜 左(D)"><el-input v-model="f.screen.sphereLeft" placeholder="如 -1.50"/></el-form-item></el-col>
@@ -38,6 +39,65 @@
       <template #footer>
         <el-button @click="visible.screen=false">取消</el-button>
         <el-button type="primary" @click="submit('screen', api.screen)">提交筛查</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 1b. 发起二次确认复测 -->
+    <el-dialog v-model="visible.retestInit" title="发起二次确认复测（异常结果二次确认）" width="560px">
+      <el-alert type="info" :closable="false" style="margin-bottom:12px"
+        title="首次异常结果暂不推送家长。复测仍异常才生成家长复诊提醒；复测恢复正常则记录异常原因并关闭本次转诊任务。" />
+      <el-form label-width="120px">
+        <el-form-item label="复测原因" required>
+          <el-select v-model="f.retestInit.reason" style="width:100%" placeholder="选择导致首次异常的现场原因">
+            <el-option label="设备遮挡/读数异常" value="DEVICE_BLOCK" />
+            <el-option label="佩戴不规范" value="WEAR_IRREGULAR" />
+            <el-option label="环境光线影响" value="ENV_LIGHT" />
+            <el-option label="学生状态波动/配合度差" value="STATE_FLUCTUATION" />
+            <el-option label="其他现场原因" value="OTHER" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="现场情况说明">
+          <el-input v-model="f.retestInit.reasonDetail" type="textarea" :rows="3"
+            placeholder="如：阶梯教室靠窗逆光、设备镜头被遮挡、学生未贴紧颌托等；可注明拟更换的设备/场地" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="visible.retestInit=false">取消</el-button>
+        <el-button type="warning" @click="submit('retestInit', api.retestInitiate)">发起复测</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 1c. 录入复测（第二次）数据 -->
+    <el-dialog v-model="visible.retestSubmit" title="录入复测数据并给出结论" width="680px">
+      <el-alert
+        :title="retestContext.normalExpected
+          ? '提示：平台将按同一标准判定。若复测恢复正常，将记录异常原因并关闭本次转诊任务（不删除、通知留痕）。'
+          : '提示：若复测仍异常，将幂等生成家长复诊提醒，两次数据、设备编号、操作人全程保留。'"
+        :type="retestContext.normalExpected ? 'success' : 'warning'" :closable="false" style="margin-bottom:10px" />
+      <el-form :model="f.retestSubmit" label-width="130px">
+        <el-row :gutter="10">
+          <el-col :span="12"><el-form-item label="复测日期"><el-date-picker v-model="f.retestSubmit.retestDate" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="复测场地"><el-input v-model="f.retestSubmit.venue" placeholder="如 校医室"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="复测设备编号"><el-input v-model="f.retestSubmit.deviceCalibNo" placeholder="可换用已校准设备"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="复测操作人"><el-input v-model="f.retestSubmit.operatorName" placeholder="健康老师/筛查员"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="裸眼视力 左"><el-input v-model="f.retestSubmit.nakedVisionLeft" placeholder="如 5.0"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="裸眼视力 右"><el-input v-model="f.retestSubmit.nakedVisionRight" placeholder="如 5.0"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="球镜 左(D)"><el-input v-model="f.retestSubmit.sphereLeft" placeholder="如 0.00"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="球镜 右(D)"><el-input v-model="f.retestSubmit.sphereRight"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="散光柱镜 左"><el-input v-model="f.retestSubmit.cylinderLeft"/></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="散光柱镜 右"><el-input v-model="f.retestSubmit.cylinderRight"/></el-form-item></el-col>
+          <el-col :span="12">
+            <el-form-item label="是否戴镜"><el-switch v-model="f.retestSubmit.wearingGlasses"/></el-form-item>
+          </el-col>
+          <el-col :span="24">
+            <el-form-item label="复测结论说明"><el-input v-model="f.retestSubmit.conclusionNote" type="textarea" :rows="2"
+              placeholder="将同步到家长可见档案：如 更换设备/遮蔽杂光后达标，或 规范佩戴后仍异常"/></el-form-item>
+          </el-col>
+        </el-row>
+      </el-form>
+      <template #footer>
+        <el-button @click="visible.retestSubmit=false">取消</el-button>
+        <el-button type="primary" @click="submit('retestSubmit', api.retestSubmit)">提交复测结论</el-button>
       </template>
     </el-dialog>
 
@@ -234,7 +294,7 @@
 </template>
 
 <script setup>
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
 
@@ -243,12 +303,18 @@ const emit = defineEmits(['done'])
 
 const visible = reactive({})
 const today = new Date().toISOString().slice(0, 10)
+// 复测弹窗上下文：retestId（录入结果）、originalScreenId（指定原记录发起）
+const retestContext = ref({ retestId: null, originalScreenId: null, normalExpected: false })
 
 const blank = () => ({
   screen: { screenDate: today, orgName: '阳光县视光中心', operatorName: '', deviceCalibNo: '',
-    nakedVisionLeft: '', nakedVisionRight: '', sphereLeft: '', sphereRight: '',
+    venue: '校医室', nakedVisionLeft: '', nakedVisionRight: '', sphereLeft: '', sphereRight: '',
     cylinderLeft: '', cylinderRight: '', wearingGlasses: false, habitSummary: '',
     retestNeeded: false, absent: false },
+  retestInit: { reason: 'DEVICE_BLOCK', reasonDetail: '' },
+  retestSubmit: { retestDate: today, orgName: '阳光县视光中心', operatorName: '', deviceCalibNo: '',
+    venue: '校医室', nakedVisionLeft: '', nakedVisionRight: '', sphereLeft: '', sphereRight: '',
+    cylinderLeft: '', cylinderRight: '', wearingGlasses: false, conclusionNote: '' },
   review: { result: 'CONFIRM', opinion: '' },
   notify: { channel: '电话', unreachable: false, remark: '' },
   choice: { choice: 'COUNTY_HOSPITAL', targetOrg: '阳光县人民医院眼科', deferReason: '', remark: '' },
@@ -264,17 +330,39 @@ const blank = () => ({
 })
 const f = reactive(blank())
 
-const open = (name) => {
+const open = (name, ctx = {}) => {
   // 重置为默认值
   const d = blank()
   Object.keys(f).forEach(k => { Object.assign(f[k], d[k]) })
+  retestContext.value = { retestId: null, originalScreenId: null, normalExpected: false, ...ctx }
+  // 发起复测时可预填原记录
+  if (name === 'retestInit' && ctx.originalScreenId) {
+    f.retestInit.originalScreenId = ctx.originalScreenId
+  }
+  // 录入复测结果时预填复测设备/操作人（默认沿用首次，可现场更换）
+  if (name === 'retestSubmit') {
+    if (ctx.deviceCalibNo) f.retestSubmit.deviceCalibNo = ctx.deviceCalibNo
+    if (ctx.venue) f.retestSubmit.venue = ctx.venue
+  }
   visible[name] = true
 }
 defineExpose({ open })
 
 const submit = async (name, call) => {
   try {
-    const payload = { studentId: props.studentId, ...f[name] }
+    let payload
+    if (name === 'retestSubmit') {
+      payload = { retestId: retestContext.value.retestId, ...f[name] }
+    } else if (name === 'retestInit') {
+      payload = {
+        ...(retestContext.value.originalScreenId
+          ? { originalScreenId: retestContext.value.originalScreenId }
+          : { studentId: props.studentId }),
+        ...f[name]
+      }
+    } else {
+      payload = { studentId: props.studentId, ...f[name] }
+    }
     await call(payload)
     visible[name] = false
     ElMessage.success('提交成功')
